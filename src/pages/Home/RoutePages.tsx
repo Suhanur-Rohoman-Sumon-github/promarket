@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect } from "react";
 import {
   useParams,
@@ -5,30 +6,40 @@ import {
   useNavigate,
   useLocation,
 } from "react-router-dom";
-import CategoryPage from "./CategoryPage";
+import CategoryPage, { type PolyEvent } from "./CategoryPage";
 import MarketDetailPage from "./MarketDetail";
-
-
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 
+export interface RoutePolyEvent extends PolyEvent {
+  slug?: string;
+}
+
+interface EventRouteState {
+  event?: RoutePolyEvent;
+  marketId?: string | null;
+  side?: "Yes" | "No";
+}
+
 export function CategoryRoute() {
-  const { category } = useParams();
+  const { category } = useParams<{ category: string }>();
   const navigate = useNavigate();
 
   return (
     <CategoryPage
       category={decodeURIComponent(category || "Politics")}
-      onSelectEvent={(ev, marketId = null, side = "Yes") =>
-        navigate(`/event/${encodeURIComponent(ev.slug)}`, {
-          state: { event: ev, marketId, side },
+      onSelectEvent={(
+        ev: RoutePolyEvent,
+        marketId?: string,
+        side: "Yes" | "No" = "Yes",
+      ) =>
+        navigate(`/event/${encodeURIComponent(ev.slug || ev.id)}`, {
+          state: { event: ev, marketId: marketId ?? null, side },
         })
       }
     />
   );
 }
-
-
 
 export function SearchRoute() {
   const [searchParams] = useSearchParams();
@@ -39,9 +50,13 @@ export function SearchRoute() {
     <CategoryPage
       category="Search"
       searchQuery={q}
-      onSelectEvent={(ev, marketId = null, side = "Yes") =>
-        navigate(`/event/${encodeURIComponent(ev.slug)}`, {
-          state: { event: ev, marketId, side },
+      onSelectEvent={(
+        ev: RoutePolyEvent,
+        marketId?: string,
+        side: "Yes" | "No" = "Yes",
+      ) =>
+        navigate(`/event/${encodeURIComponent(ev.slug || ev.id)}`, {
+          state: { event: ev, marketId: marketId ?? null, side },
         })
       }
     />
@@ -49,22 +64,30 @@ export function SearchRoute() {
 }
 
 export function EventDetailRoute() {
-  const { slug } = useParams();
+  const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const stateEvent = location.state?.event || null;
-  const [event, setEvent] = useState(stateEvent);
-  const [loading, setLoading] = useState(!stateEvent);
-  const [error, setError] = useState("");
+  const routeState = (location.state as EventRouteState | null) || null;
+  const stateEvent = routeState?.event || null;
+
+  const [event, setEvent] = useState<RoutePolyEvent | null>(stateEvent);
+  const [loading, setLoading] = useState<boolean>(!stateEvent);
+  const [error, setError] = useState<string>("");
 
   // Sync if user clicks a Related Market or another search result while already on /event/:slug
   useEffect(() => {
-    if (location.state?.event && location.state.event.slug === slug) {
-      setEvent(location.state.event);
+    if (routeState?.event && routeState.event.slug === slug) {
+      setEvent(routeState.event);
       setLoading(false);
       setError("");
       window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+
+    if (!slug) {
+      setLoading(false);
+      setError("Market not found.");
       return;
     }
 
@@ -76,7 +99,7 @@ export function EventDetailRoute() {
     fetch(`${GAMMA_API}/events?slug=${encodeURIComponent(slug)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return res.json() as Promise<RoutePolyEvent[] | RoutePolyEvent>;
       })
       .then((data) => {
         if (cancelled) return;
@@ -84,8 +107,12 @@ export function EventDetailRoute() {
         if (!found) throw new Error("Market not found.");
         setEvent(found);
       })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || "Failed to load market.");
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load market.",
+          );
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -94,7 +121,7 @@ export function EventDetailRoute() {
     return () => {
       cancelled = true;
     };
-  }, [slug, location.state]);
+  }, [slug, routeState]);
 
   if (loading) {
     return (
@@ -109,6 +136,7 @@ export function EventDetailRoute() {
       <div className="min-h-screen bg-[#0d1016] text-white p-8 flex flex-col items-center justify-center gap-4">
         <p className="text-sm text-red-400">{error || "Market not found."}</p>
         <button
+          type="button"
           onClick={() => navigate("/")}
           className="px-4 py-2 rounded-xl bg-[#2563eb] text-xs font-bold"
         >
@@ -120,12 +148,12 @@ export function EventDetailRoute() {
 
   return (
     <MarketDetailPage
-      event={event}
-      initialMarketId={location.state?.marketId || null}
-      initialSide={location.state?.side || "Yes"}
+      event={{ ...event, title: event.title ?? "" }}
+      initialMarketId={routeState?.marketId || null}
+      initialSide={routeState?.side || "Yes"}
       onBack={() => navigate(-1)}
-      onSelectEvent={(ev) =>
-        navigate(`/event/${encodeURIComponent(ev.slug)}`, {
+      onSelectEvent={(ev: RoutePolyEvent) =>
+        navigate(`/event/${encodeURIComponent(ev.slug || ev.id)}`, {
           state: { event: ev },
         })
       }

@@ -1,14 +1,65 @@
+/* eslint-disable no-useless-assignment */
+/* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 
 const POLY_API = "https://gamma-api.polymarket.com";
 const PAGE_SIZE = 20;
 
-function safeParseArray(val, fallback = []) {
-  if (Array.isArray(val)) return val;
+export interface PolyTag {
+  label?: string;
+  slug?: string;
+}
+
+export interface PolyMarket {
+  id: string;
+  active?: boolean;
+  closed?: boolean;
+  outcomes?: string[] | string;
+  outcomePrices?: string[] | string;
+  groupItemTitle?: string;
+  question?: string;
+}
+
+export interface PolyEvent {
+  id: string;
+  title?: string;
+  icon?: string;
+  image?: string;
+  volume?: number | string;
+  volume24hr?: number | string;
+  live?: boolean;
+  markets?: PolyMarket[];
+  tags?: PolyTag[];
+}
+
+export interface PolymarketExplorePageProps {
+  onSelectEvent?: (
+    event: PolyEvent,
+    marketId?: string,
+    outcome?: string,
+  ) => void;
+}
+
+interface CardFooterProps {
+  event: PolyEvent;
+  subLabel?: string;
+  bookmarked: boolean;
+  onToggleBookmark: (id: string) => void;
+}
+
+interface MarketCardProps {
+  event: PolyEvent;
+  bookmarked: boolean;
+  onToggleBookmark: (id: string) => void;
+  onOpenDetail: (event: PolyEvent, marketId?: string, outcome?: string) => void;
+}
+
+function safeParseArray<T = string>(val: unknown, fallback: T[] = []): T[] {
+  if (Array.isArray(val)) return val as T[];
   if (typeof val === "string") {
     try {
-      const parsed = JSON.parse(val);
-      return Array.isArray(parsed) ? parsed : fallback;
+      const parsed: unknown = JSON.parse(val);
+      return Array.isArray(parsed) ? (parsed as T[]) : fallback;
     } catch {
       return fallback;
     }
@@ -16,7 +67,7 @@ function safeParseArray(val, fallback = []) {
   return fallback;
 }
 
-function formatVolume(vol) {
+function formatVolume(vol: number | string | undefined): string {
   const num = Number(vol) || 0;
   if (num >= 1_000_000) {
     const m = num / 1_000_000;
@@ -26,13 +77,19 @@ function formatVolume(vol) {
   return `$${Math.round(num)} Vol.`;
 }
 
-function toPercent(priceStr) {
-  const p = parseFloat(priceStr);
+function toPercent(priceStr: string | undefined): number {
+  const p = parseFloat(priceStr || "");
   if (Number.isNaN(p)) return 0;
   return Math.max(0, Math.min(100, Math.round(p * 100)));
 }
 
-export function SemiGauge({ percent, label = "Chance" }) {
+export function SemiGauge({
+  percent,
+  label = "Chance",
+}: {
+  percent: number;
+  label?: string;
+}) {
   const clamped = Math.max(0, Math.min(100, percent));
   const radius = 22;
   const circumference = Math.PI * radius;
@@ -69,9 +126,15 @@ export function SemiGauge({ percent, label = "Chance" }) {
   );
 }
 
-function CardFooter({ event, subLabel, bookmarked, onToggleBookmark }) {
+function CardFooter({
+  event,
+  subLabel,
+  bookmarked,
+  onToggleBookmark,
+}: CardFooterProps) {
   const isLive =
-    event.live || event.title?.toLowerCase().includes("up or down");
+    Boolean(event.live) ||
+    Boolean(event.title?.toLowerCase().includes("up or down"));
 
   return (
     <div className="flex items-center justify-between pt-3 mt-auto text-[12px] text-gray-400">
@@ -120,7 +183,12 @@ function CardFooter({ event, subLabel, bookmarked, onToggleBookmark }) {
   );
 }
 
-function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
+function MarketCard({
+  event,
+  bookmarked,
+  onToggleBookmark,
+  onOpenDetail,
+}: MarketCardProps) {
   const activeMarkets = (event.markets || []).filter(
     (m) => m.active !== false && m.closed !== true,
   );
@@ -136,12 +204,16 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
   const isBinaryYesNo =
     marketsToUse.length === 1 &&
     firstOutcomes.length === 2 &&
-    ["yes", "no", "up", "down"].includes(firstOutcomes[0]?.toLowerCase());
+    ["yes", "no", "up", "down"].includes(
+      (firstOutcomes[0] || "").toLowerCase(),
+    );
 
   const isSingleMatchup =
     marketsToUse.length === 1 &&
     firstOutcomes.length === 2 &&
-    !["yes", "no", "up", "down"].includes(firstOutcomes[0]?.toLowerCase());
+    !["yes", "no", "up", "down"].includes(
+      (firstOutcomes[0] || "").toLowerCase(),
+    );
 
   const isThreeWaySports =
     marketsToUse.length === 3 &&
@@ -153,7 +225,12 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
 
   // 1. MATCHUP CARD
   if (isSingleMatchup || isThreeWaySports) {
-    let team1, team2, pct1, pct2, hasDraw;
+    let team1 = "Home";
+    let team2 = "Away";
+    let pct1 = 0;
+    let pct2 = 0;
+    let hasDraw = false;
+
     if (isThreeWaySports) {
       const nonDraw = marketsToUse.filter(
         (m) => !(m.groupItemTitle || "").toLowerCase().includes("draw"),
@@ -165,8 +242,8 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
       pct2 = toPercent(safeParseArray(nonDraw[1]?.outcomePrices)[0]);
     } else {
       hasDraw = false;
-      team1 = firstOutcomes[0];
-      team2 = firstOutcomes[1];
+      team1 = firstOutcomes[0] || "Home";
+      team2 = firstOutcomes[1] || "Away";
       pct1 = toPercent(firstPrices[0]);
       pct2 = toPercent(firstPrices[1]);
     }
@@ -267,8 +344,8 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
 
   // 2. BINARY GAUGE CARD
   if (isBinaryYesNo) {
-    const labelA = firstOutcomes[0];
-    const labelB = firstOutcomes[1];
+    const labelA = firstOutcomes[0] || "Yes";
+    const labelB = firstOutcomes[1] || "No";
     const pctA = toPercent(firstPrices[0]);
 
     return (
@@ -281,7 +358,7 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
             {(event.icon || event.image) && (
               <img
                 src={event.icon || event.image}
-                alt={event.title}
+                alt={event.title || "Market"}
                 className="w-9 h-9 rounded-lg object-cover bg-white/5 shrink-0"
               />
             )}
@@ -328,8 +405,8 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
   // 3. MULTI-OUTCOME CARD
   const topMarkets = [...marketsToUse]
     .sort((a, b) => {
-      const pa = parseFloat(safeParseArray(a.outcomePrices)[0] || 0);
-      const pb = parseFloat(safeParseArray(b.outcomePrices)[0] || 0);
+      const pa = parseFloat(safeParseArray(a.outcomePrices)[0] || "0");
+      const pb = parseFloat(safeParseArray(b.outcomePrices)[0] || "0");
       return pb - pa;
     })
     .slice(0, 2);
@@ -343,7 +420,7 @@ function MarketCard({ event, bookmarked, onToggleBookmark, onOpenDetail }) {
         {(event.icon || event.image) && (
           <img
             src={event.icon || event.image}
-            alt={event.title}
+            alt={event.title || "Market"}
             className="w-9 h-9 rounded-lg object-cover bg-white/5 shrink-0"
           />
         )}
@@ -425,19 +502,21 @@ function SkeletonCard() {
   );
 }
 
-export default function PolymarketExplorePage({ onSelectEvent }) {
-  const [events, setEvents] = useState([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [bookmarks, setBookmarks] = useState(() => new Set());
+export default function PolymarketExplorePage({
+  onSelectEvent,
+}: PolymarketExplorePageProps) {
+  const [events, setEvents] = useState<PolyEvent[]>([]);
+  const [offset, setOffset] = useState<number>(0);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string>("");
+  const [bookmarks, setBookmarks] = useState<Set<string>>(() => new Set());
 
-  const sentinelRef = useRef(null);
-  const abortRef = useRef(null);
-  const isFetchingRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const isFetchingRef = useRef<boolean>(false);
 
-  const fetchEvents = useCallback(async (nextOffset, reset = false) => {
+  const fetchEvents = useCallback(async (nextOffset: number, reset = false) => {
     if (reset && abortRef.current) abortRef.current.abort();
     if (!reset && isFetchingRef.current) return;
 
@@ -466,8 +545,8 @@ export default function PolymarketExplorePage({ onSelectEvent }) {
         throw new Error(`Polymarket API ${res.status}: ${errBody}`);
       }
 
-      const data = await res.json();
-      const batch = Array.isArray(data) ? data : data.events || [];
+      const data = (await res.json()) as PolyEvent[] | { events?: PolyEvent[] };
+      const batch: PolyEvent[] = Array.isArray(data) ? data : data.events || [];
 
       setEvents((prev) => {
         if (reset) return batch;
@@ -478,9 +557,13 @@ export default function PolymarketExplorePage({ onSelectEvent }) {
       const next = nextOffset + batch.length;
       setOffset(next);
       setHasMore(batch.length === PAGE_SIZE && next < 2000);
-    } catch (err) {
-      if (err.name === "AbortError") return;
-      setError(err.message || "Unable to fetch from Polymarket API.");
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to fetch from Polymarket API.",
+      );
     } finally {
       if (abortRef.current === controller) {
         isFetchingRef.current = false;
@@ -509,7 +592,7 @@ export default function PolymarketExplorePage({ onSelectEvent }) {
     return () => observer.disconnect();
   }, [offset, hasMore, fetchEvents]);
 
-  const toggleBookmark = (id) => {
+  const toggleBookmark = (id: string) => {
     setBookmarks((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
