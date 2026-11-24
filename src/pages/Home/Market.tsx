@@ -21,6 +21,7 @@ export interface PolyMarket {
 }
 
 export interface PolyEvent {
+  slug: string;
   id: string;
   title?: string;
   icon?: string;
