@@ -1,13 +1,13 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import PerpsDashboard, { type PolymarketEvent } from "./Banner";
+import PerpsDashboard from "./Banner";
 import PolymarketExplorePage from "./Market";
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
 
   const openMarket = (
-    event: PolymarketEvent,
+    event: Parameters<NonNullable<React.ComponentProps<typeof PolymarketExplorePage>["onSelectEvent"]>>[0],
     marketId: string | null = null,
     side = "Yes",
   ): void => {

@@ -1,6 +1,6 @@
 /* eslint-disable no-useless-assignment */
 /* eslint-disable react-hooks/set-state-in-effect */
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import  { useState, useEffect, useRef, useCallback } from "react";
 
 const POLY_API = "https://gamma-api.polymarket.com";
 const PAGE_SIZE = 20;
