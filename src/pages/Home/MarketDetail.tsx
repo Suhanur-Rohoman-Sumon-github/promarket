@@ -1861,7 +1861,7 @@ export default function MarketDetailPage({
                   : !isLoggedIn
                     ? "Log in to Trade"
                     : loadingCash
-                      ? "Loading Balance..."
+                      ? "Loading..."
                       : tradeTab === "Buy" && cash <= 0
                         ? "Deposit Cash"
                         : `${tradeTab} ${selectedSide}`}
