@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search,
@@ -10,7 +11,50 @@ import {
 const POLY_API = "https://gamma-api.polymarket.com";
 const PAGE_SIZE = 21;
 
-const CATEGORY_SLUG_MAP = {
+export interface SubTag {
+  label: string;
+  slug: string;
+  count: number;
+}
+
+export interface PolyTag {
+  label?: string;
+  slug?: string;
+}
+
+export interface PolyMarket {
+  id: string;
+  active?: boolean;
+  closed?: boolean;
+  outcomePrices?: string[] | string;
+  groupItemTitle?: string;
+  question?: string;
+}
+
+export interface PolyEvent {
+  id: string;
+  title?: string;
+  icon?: string;
+  image?: string;
+  volume?: number | string;
+  volume24hr?: number | string;
+  markets?: PolyMarket[];
+  tags?: PolyTag[];
+}
+
+export interface CategoryPageProps {
+  category: string;
+  searchQuery?: string;
+  onSelectEvent?: (
+    event: PolyEvent,
+    marketId?: string,
+    outcome?: "Yes" | "No",
+  ) => void;
+}
+
+type SortOption = "volume24hr" | "volume" | "startDate";
+
+const CATEGORY_SLUG_MAP: Record<string, string> = {
   Politics: "politics",
   Crypto: "crypto",
   Esports: "esports",
@@ -29,7 +73,7 @@ const CATEGORY_SLUG_MAP = {
   New: "new",
 };
 
-const SUBCATEGORY_PRESETS = {
+const SUBCATEGORY_PRESETS: Record<string, SubTag[]> = {
   Politics: [
     { label: "Trump", slug: "trump", count: 318 },
     { label: "Midterms", slug: "midterms", count: 506 },
@@ -52,12 +96,12 @@ const SUBCATEGORY_PRESETS = {
   ],
 };
 
-function safeParseArray(val, fallback = []) {
-  if (Array.isArray(val)) return val;
+function safeParseArray<T = string>(val: unknown, fallback: T[] = []): T[] {
+  if (Array.isArray(val)) return val as T[];
   if (typeof val === "string") {
     try {
-      const parsed = JSON.parse(val);
-      return Array.isArray(parsed) ? parsed : fallback;
+      const parsed: unknown = JSON.parse(val);
+      return Array.isArray(parsed) ? (parsed as T[]) : fallback;
     } catch {
       return fallback;
     }
@@ -65,7 +109,7 @@ function safeParseArray(val, fallback = []) {
   return fallback;
 }
 
-function formatVol(vol) {
+function formatVol(vol: number | string | undefined): string {
   const num = Number(vol) || 0;
   if (num >= 1_000_000_000)
     return `$${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B Vol.`;
@@ -74,7 +118,7 @@ function formatVol(vol) {
   return `$${Math.round(num)} Vol.`;
 }
 
-function SemiGauge({ percent }) {
+function SemiGauge({ percent }: { percent: number }) {
   const clamped = Math.max(0, Math.min(100, percent));
   const r = 20;
   const c = Math.PI * r;
@@ -115,21 +159,21 @@ export default function CategoryPage({
   category,
   searchQuery = "",
   onSelectEvent,
-}) {
-  const [subTags, setSubTags] = useState([]);
-  const [selectedSub, setSelectedSub] = useState("all");
-  const [localFilter, setLocalFilter] = useState("");
-  const [showFilterBox, setShowFilterBox] = useState(false);
-  const [sortBy, setSortBy] = useState("volume24hr");
-  const [events, setEvents] = useState([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [bookmarks, setBookmarks] = useState(() => new Set());
+}: CategoryPageProps) {
+  const [subTags, setSubTags] = useState<SubTag[]>([]);
+  const [selectedSub, setSelectedSub] = useState<string>("all");
+  const [localFilter, setLocalFilter] = useState<string>("");
+  const [showFilterBox, setShowFilterBox] = useState<boolean>(false);
+  const [sortBy, setSortBy] = useState<SortOption>("volume24hr");
+  const [events, setEvents] = useState<PolyEvent[]>([]);
+  const [offset, setOffset] = useState<number>(0);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [bookmarks, setBookmarks] = useState<Set<string>>(() => new Set());
 
-  const sentinelRef = useRef(null);
-  const abortRef = useRef(null);
-  const isFetchingRef = useRef(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const isFetchingRef = useRef<boolean>(false);
 
   // Reset sub-selection when category changes
   useEffect(() => {
@@ -140,7 +184,7 @@ export default function CategoryPage({
 
   // Fetch category events (auto-fallback to public-search if tag_slug is empty)
   const fetchCategoryEvents = useCallback(
-    async (nextOffset, reset) => {
+    async (nextOffset: number, reset: boolean) => {
       if (reset && abortRef.current) abortRef.current.abort();
       if (!reset && isFetchingRef.current) return;
 
@@ -150,7 +194,7 @@ export default function CategoryPage({
       setLoading(true);
 
       try {
-        let batch = [];
+        let batch: PolyEvent[] = [];
 
         if (searchQuery) {
           const res = await fetch(
@@ -159,7 +203,7 @@ export default function CategoryPage({
             )}&limit_per_type=24`,
             { signal: controller.signal },
           );
-          const data = await res.json();
+          const data = (await res.json()) as { events?: PolyEvent[] };
           batch = Array.isArray(data?.events) ? data.events : [];
         } else {
           const activeSlug =
@@ -187,7 +231,9 @@ export default function CategoryPage({
             signal: controller.signal,
           });
           if (res.ok) {
-            const data = await res.json();
+            const data = (await res.json()) as
+              | PolyEvent[]
+              | { events?: PolyEvent[] };
             batch = Array.isArray(data) ? data : data.events || [];
           }
 
@@ -200,7 +246,7 @@ export default function CategoryPage({
               )}&limit_per_type=24`,
               { signal: controller.signal },
             );
-            const sData = await sRes.json();
+            const sData = (await sRes.json()) as { events?: PolyEvent[] };
             batch = Array.isArray(sData?.events) ? sData.events : [];
           }
         }
@@ -211,7 +257,7 @@ export default function CategoryPage({
           if (preset) {
             setSubTags(preset);
           } else {
-            const map = new Map();
+            const map = new Map<string, SubTag>();
             batch.forEach((ev) => {
               (ev.tags || []).forEach((t) => {
                 if (!t?.label || !t?.slug || t.label === category) return;
@@ -236,8 +282,10 @@ export default function CategoryPage({
         const next = nextOffset + batch.length;
         setOffset(next);
         setHasMore(!searchQuery && batch.length === PAGE_SIZE && next < 2000);
-      } catch (err) {
-        if (err.name !== "AbortError") console.error(err);
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name !== "AbortError") {
+          console.error(err);
+        }
       } finally {
         if (abortRef.current === controller) {
           isFetchingRef.current = false;
@@ -276,7 +324,10 @@ export default function CategoryPage({
       )
     : events;
 
-  const toggleBookmark = (id, e) => {
+  const toggleBookmark = (
+    id: string,
+    e: React.MouseEvent<HTMLButtonElement>,
+  ) => {
     e.stopPropagation();
     setBookmarks((prev) => {
       const next = new Set(prev);
@@ -293,6 +344,7 @@ export default function CategoryPage({
         {!searchQuery && (
           <aside className="w-full lg:w-[220px] shrink-0 space-y-1">
             <button
+              type="button"
               onClick={() => setSelectedSub("all")}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition-colors ${
                 selectedSub === "all"
@@ -310,6 +362,7 @@ export default function CategoryPage({
               {subTags.map((tag) => (
                 <button
                   key={tag.slug}
+                  type="button"
                   onClick={() => setSelectedSub(tag.slug)}
                   className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl text-[13px] font-semibold whitespace-nowrap transition-colors ${
                     selectedSub === tag.slug
@@ -345,6 +398,7 @@ export default function CategoryPage({
                 />
               )}
               <button
+                type="button"
                 onClick={() => setShowFilterBox((s) => !s)}
                 className="p-2 rounded-lg hover:bg-white/[0.06] hover:text-white transition-colors"
                 title="Filter"
@@ -352,6 +406,7 @@ export default function CategoryPage({
                 <Search size={17} />
               </button>
               <button
+                type="button"
                 onClick={() =>
                   setSortBy((s) =>
                     s === "volume24hr" ? "volume" : "volume24hr",
@@ -363,6 +418,7 @@ export default function CategoryPage({
                 <SlidersHorizontal size={17} />
               </button>
               <button
+                type="button"
                 className="p-2 rounded-lg hover:bg-white/[0.06] hover:text-white transition-colors"
                 title="Bookmarks"
               >
@@ -387,13 +443,13 @@ export default function CategoryPage({
                 "0.5",
               ]);
               const firstPct = Math.round(
-                (parseFloat(firstPrices[0]) || 0) * 100,
+                (parseFloat(firstPrices[0] || "0") || 0) * 100,
               );
               const topTwo = [...mkts]
                 .sort(
                   (a, b) =>
-                    parseFloat(safeParseArray(b.outcomePrices)[0] || 0) -
-                    parseFloat(safeParseArray(a.outcomePrices)[0] || 0),
+                    parseFloat(safeParseArray(b.outcomePrices)[0] || "0") -
+                    parseFloat(safeParseArray(a.outcomePrices)[0] || "0"),
                 )
                 .slice(0, 2);
 
@@ -410,7 +466,7 @@ export default function CategoryPage({
                           {(ev.icon || ev.image) && (
                             <img
                               src={ev.icon || ev.image}
-                              alt={ev.title}
+                              alt={ev.title || "Market"}
                               className="w-9 h-9 rounded-lg object-cover bg-white/10 shrink-0"
                             />
                           )}
@@ -423,6 +479,7 @@ export default function CategoryPage({
 
                       <div className="grid grid-cols-2 gap-2 mt-4">
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             onSelectEvent?.(ev, mkts[0].id, "Yes");
@@ -432,6 +489,7 @@ export default function CategoryPage({
                           Yes
                         </button>
                         <button
+                          type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             onSelectEvent?.(ev, mkts[0].id, "No");
@@ -448,7 +506,7 @@ export default function CategoryPage({
                         {(ev.icon || ev.image) && (
                           <img
                             src={ev.icon || ev.image}
-                            alt={ev.title}
+                            alt={ev.title || "Market"}
                             className="w-9 h-9 rounded-lg object-cover bg-white/10 shrink-0"
                           />
                         )}
@@ -460,7 +518,9 @@ export default function CategoryPage({
                       <div className="space-y-2">
                         {topTwo.map((m) => {
                           const p = safeParseArray(m.outcomePrices, ["0", "1"]);
-                          const pct = Math.round((parseFloat(p[0]) || 0) * 100);
+                          const pct = Math.round(
+                            (parseFloat(p[0] || "0") || 0) * 100,
+                          );
                           return (
                             <div
                               key={m.id}
@@ -474,6 +534,7 @@ export default function CategoryPage({
                                   {pct}%
                                 </span>
                                 <button
+                                  type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     onSelectEvent?.(ev, m.id, "Yes");
@@ -483,6 +544,7 @@ export default function CategoryPage({
                                   Yes
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     onSelectEvent?.(ev, m.id, "No");
@@ -508,6 +570,7 @@ export default function CategoryPage({
                       <RefreshCw size={12} />
                       <Gift size={13} />
                       <button
+                        type="button"
                         onClick={(e) => toggleBookmark(ev.id, e)}
                         className="hover:text-white"
                       >
