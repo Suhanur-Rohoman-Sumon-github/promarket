@@ -322,11 +322,14 @@ export default function Navbar() {
   return (
     <>
       <header className="sticky top-0 z-40 w-full bg-[#0e1015] text-white border-b border-[#292c34]">
-        <div className="h-[58px] px-3 md:px-5 flex items-center gap-4">
+        <div className="h-[58px] px-3 md:px-5 flex items-center justify-between md:justify-start gap-4">
           {/* Logo */}
-          <button
-            type="button"
-            onClick={() => handleCategoryClick("Trending")}
+          <Link
+            to="/"
+            onClick={() => {
+              setDropdownOpen(false);
+              setMobileOpen(false);
+            }}
             className="flex items-center gap-2 shrink-0 text-left"
           >
             <svg width="22" height="25" viewBox="0 0 22 25" fill="none">
@@ -337,18 +340,16 @@ export default function Navbar() {
                 strokeWidth="2"
               />
             </svg>
-            <Link to="/" className="text-lg font-bold text-white">
-              <span className="text-[19px] font-semibold tracking-tight cursor-pointer">
-                Promarkets
-              </span>
-            </Link>
-            <span className="hidden sm:block text-[#444750] mx-2">|</span>
-          </button>
+            <span className="text-[19px] font-semibold tracking-tight text-white cursor-pointer">
+              Promarkets
+            </span>
+            <span className="hidden md:block text-[#444750] mx-2">|</span>
+          </Link>
 
-          {/* Search */}
+          {/* Search (hidden on mobile, shown on md+ screens as is) */}
           <div
             ref={searchWrapperRef}
-            className="flex-1 flex justify-center min-w-0 relative"
+            className="hidden md:flex flex-1 justify-center min-w-0 relative"
           >
             <div className="w-full max-w-[480px] relative">
               <div className="w-full h-10 bg-[#1b1e27] rounded-xl flex items-center px-3 gap-2 focus-within:ring-1 focus-within:ring-[#454b5a]">
@@ -458,17 +459,17 @@ export default function Navbar() {
           >
             {user ? (
               <>
-                <div className="hidden md:flex items-center gap-4 mr-1">
+                <div className="flex items-center gap-2 md:gap-4 mr-0.5 md:mr-1">
                   <button
                     type="button"
                     onClick={() => goToPage("/withdraw")}
                     title="Click to withdraw funds"
-                    className="text-right leading-tight px-2 py-1 rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
+                    className="text-right leading-tight px-1.5 md:px-2 py-1 rounded-lg hover:bg-white/[0.06] transition-colors cursor-pointer"
                   >
-                    <p className="text-[11px] font-medium text-gray-400">
+                    <p className="text-[10px] md:text-[11px] font-medium text-gray-400">
                       Cash
                     </p>
-                    <p className="text-sm font-bold text-[#22c55e] tabular-nums">
+                    <p className="text-xs md:text-sm font-bold text-[#22c55e] tabular-nums">
                       {formatUsd(user.cash)}
                     </p>
                   </button>
