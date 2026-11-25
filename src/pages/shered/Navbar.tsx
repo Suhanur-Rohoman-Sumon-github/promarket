@@ -144,7 +144,7 @@ export default function Navbar() {
     const fetchUser = async () => {
       try {
         const token = await getFirebaseToken();
-        console.log("Fetched Firebase token:", token); // <-- Add this
+       
         if (!token) {
           setUser(null);
           return;
