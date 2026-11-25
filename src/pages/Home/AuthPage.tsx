@@ -14,7 +14,8 @@ import {
 import { auth, googleProvider, isFirebaseConfigured } from "../../firebase"; // <-- adjust path to your src/firebase.ts
 
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
-const API_BASE = import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+const API_BASE =
+  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
 
 const US_STATES = [
   { code: "AL", name: "Alabama" },

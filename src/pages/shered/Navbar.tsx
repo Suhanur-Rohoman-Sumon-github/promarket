@@ -1,6 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
+import { getFirebaseToken } from "../../utils/getFirebaseToken"; // adjust path if placed elsewhere
 
 import {
   Search,
@@ -142,17 +143,33 @@ export default function Navbar() {
 
     const fetchUser = async () => {
       try {
+        const token = await getFirebaseToken();
+        console.log("Fetched Firebase token:", token); // <-- Add this
+        if (!token) {
+          setUser(null);
+          return;
+        }
+
         const res = await fetch(
           `${API_BASE}/users/${encodeURIComponent(userEmail)}`,
-          { signal: controller.signal },
+          {
+            signal: controller.signal,
+            cache: "no-store",
+            credentials: "include",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
         );
+
         if (!res.ok) {
-          if (res.status === 404) {
+          if (res.status === 401 || res.status === 404) {
             localStorage.removeItem(AUTH_STORAGE_KEY);
             setUser(null);
           }
           return;
         }
+
         const json = (await res.json()) as {
           success?: boolean;
           data?: UserProfile;
@@ -169,9 +186,25 @@ export default function Navbar() {
 
     fetchUser();
 
-    return () => controller.abort();
-  }, [userEmail, location.pathname]);
+    // Re-fetch or sync live when RewardsPage / DepositPage updates the user
+    const handleUserUpdated = (e: Event) => {
+      const custom = e as CustomEvent<UserProfile>;
+      if (custom.detail?.email) {
+        setUser(custom.detail);
+      } else {
+        fetchUser();
+      }
+    };
 
+    window.addEventListener("promarkets-user-updated", handleUserUpdated);
+    window.addEventListener("promarkets-deposit-success", fetchUser);
+
+    return () => {
+      controller.abort();
+      window.removeEventListener("promarkets-user-updated", handleUserUpdated);
+      window.removeEventListener("promarkets-deposit-success", fetchUser);
+    };
+  }, [userEmail, location.pathname]);
   useEffect(() => {
     const openDeposit = () => navigate("/deposit");
     window.addEventListener("open-deposit-modal", openDeposit);
