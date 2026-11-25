@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Loader2, ShieldCheck } from "lucide-react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken"; // <-- adjust path if needed
 
 const MIN_DEPOSIT = 15;
 const QUICK_AMOUNTS = [15, 25, 50, 100, 250];
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
-const API_BASE =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app";
+const API_BASE = (
+  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app"
+).replace(/\/api\/v1\/?$/, "");
 
 export default function DepositPage() {
   const navigate = useNavigate();
@@ -35,16 +37,22 @@ export default function DepositPage() {
 
     setLoading(true);
     try {
+      const token = await getFirebaseToken();
+      if (!token) {
+        throw new Error("Please log in first to deposit funds.");
+      }
+
       const res = await fetch(`${API_BASE}/api/v1/deposit/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           amountUsd: amount,
           userId: user?.email || user?.username || "guest",
         }),
       });
-
-      console.log(res);
 
       const text = await res.text();
       const json = text ? JSON.parse(text) : {};

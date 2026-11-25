@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken"; // <-- adjust path if needed
 
 const MIN_WITHDRAW = 30;
 const QUICK_AMOUNTS = [30, 50, 100, 250];
@@ -61,23 +62,46 @@ export default function WithdrawPage() {
   useEffect(() => {
     if (!userEmail) return;
 
-    fetch(`${API_BASE}/users/${encodeURIComponent(userEmail)}`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success && json.data) {
-          setCash(Number(json.data.cash) || 0);
-        }
-      })
-      .catch(() => {});
+    let cancelled = false;
 
-    fetch(`${API_BASE}/withdraw/user/${encodeURIComponent(userEmail)}`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.success && Array.isArray(json.data)) {
-          setHistory(json.data);
-        }
+    const loadWithdrawData = async () => {
+      const token = await getFirebaseToken();
+      if (!token || cancelled) return;
+
+      const headers = {
+        Authorization: `Bearer ${token}`,
+      };
+
+      fetch(`${API_BASE}/users/${encodeURIComponent(userEmail)}`, {
+        cache: "no-store",
+        headers,
       })
-      .catch(() => {});
+        .then((res) => res.json())
+        .then((json) => {
+          if (!cancelled && json.success && json.data) {
+            setCash(Number(json.data.cash) || 0);
+          }
+        })
+        .catch(() => {});
+
+      fetch(`${API_BASE}/withdraw/user/${encodeURIComponent(userEmail)}`, {
+        cache: "no-store",
+        headers,
+      })
+        .then((res) => res.json())
+        .then((json) => {
+          if (!cancelled && json.success && Array.isArray(json.data)) {
+            setHistory(json.data);
+          }
+        })
+        .catch(() => {});
+    };
+
+    loadWithdrawData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [userEmail]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -108,9 +132,17 @@ export default function WithdrawPage() {
 
     setLoading(true);
     try {
+      const token = await getFirebaseToken();
+      if (!token) {
+        throw new Error("Session expired. Please log in again.");
+      }
+
       const res = await fetch(`${API_BASE}/withdraw/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           email: userEmail,
           amountUsd: amount,

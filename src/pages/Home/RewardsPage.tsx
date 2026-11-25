@@ -14,6 +14,7 @@ import {
   Clock,
   UserPlus,
 } from "lucide-react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken"; // <-- adjust path if needed
 
 const API_BASE_URL =
   import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
@@ -204,15 +205,24 @@ export function RewardsPage({
     setSpinError(null);
 
     try {
+      const token = await getFirebaseToken();
+      if (!token) {
+        setDbUser(null);
+        return;
+      }
+
       const res = await fetch(
         `${API_BASE_URL}/users/${encodeURIComponent(email)}`,
-        { cache: "no-store" },
+        {
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
       );
       const json = await res.json().catch(() => null);
-      
 
       if (!res.ok || !json?.success || !json?.data) {
-        
         setIsSpinning(false);
         setSpinError(
           json?.message || json?.error || `Server error (${res.status})`,
@@ -356,9 +366,19 @@ export function RewardsPage({
 
     spinTimerRef.current = window.setTimeout(async () => {
       try {
+        const token = await getFirebaseToken();
+        if (!token) {
+          setIsSpinning(false);
+          setSpinError("Session expired. Please log in again.");
+          return;
+        }
+
         const res = await fetch(`${API_BASE_URL}/users/spin`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
           body: JSON.stringify({ email: activeEmail }),
         });
 
