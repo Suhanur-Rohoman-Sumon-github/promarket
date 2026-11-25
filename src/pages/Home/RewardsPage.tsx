@@ -1,1143 +1,2230 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
-import {
-  CircleDollarSign,
-  Gift,
-  CheckCircle2,
-  Bitcoin,
-  Sparkles,
-  Lock,
-  X,
-  Zap,
-  Calendar,
-  Clock,
-  UserPlus,
-} from "lucide-react";
-import { getFirebaseToken } from "../../utils/getFirebaseToken"; // <-- adjust path if needed
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken";
 
-const API_BASE_URL =
+const GAMMA_API = "https://gamma-api.polymarket.com";
+const CLOB_API = "https://clob.polymarket.com";
+const WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
+const API_BASE =
   import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+
+const LINE_COLORS = ["#60a5fa", "#2563eb", "#eab308", "#f97316"] as const;
+
+const TIMEFRAMES = [
+  { label: "1H", interval: "1h", fidelity: 1 },
+  { label: "6H", interval: "6h", fidelity: 5 },
+  { label: "1D", interval: "1d", fidelity: 15 },
+  { label: "1W", interval: "1w", fidelity: 60 },
+  { label: "1M", interval: "1m", fidelity: 180 },
+  { label: "ALL", interval: "max", fidelity: 720 },
+] as const;
 
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 
-export interface SpinRecord {
-  day: number;
-  amount: number;
-  spunAt: number;
-}
-
-interface DbUser {
-  id?: string;
+// ---------- Types ----------
+interface DemoUser {
   username?: string;
-  email: string;
-  cash: number;
-  portfolio?: number;
-  hasFirstDeposit: boolean;
-  spins: SpinRecord[];
+  email?: string;
+  password?: string;
+  portfolio?: string;
+  cash?: string | number;
 }
 
-export interface RewardsPageProps {
-  userEmail?: string;
-  hasFirstDeposit?: boolean;
-  onDepositClick?: () => void;
-  onSignupClick?: () => void;
-  onClaimBonus?: (amountUsd: number, day: number) => Promise<void> | void;
+export interface MarketTag {
+  id?: string;
+  label?: string;
+  slug?: string;
 }
 
-interface SpinSegment {
-  amount: number;
-  label: string;
-  gradStart: string;
-  gradEnd: string;
-  textColor: string;
-  subColor: string;
+export interface MarketSubMarket {
+  id: string;
+  question?: string;
+  groupItemTitle?: string;
+  outcomes?: string[] | string;
+  outcomePrices?: string[] | string;
+  clobTokenIds?: string[] | string;
+  positionIds?: string[] | string;
+  active?: boolean;
+  closed?: boolean;
+  volume?: number | string;
+  volumeNum?: number | string;
+  image?: string;
+  icon?: string;
 }
 
-const SPIN_SEGMENTS: SpinSegment[] = [
-  {
-    amount: 3,
-    label: "$3",
-    gradStart: "#14532d",
-    gradEnd: "#052e16",
-    textColor: "#6ee7b7",
-    subColor: "#34d399",
-  },
-  {
-    amount: 100,
-    label: "$100",
-    gradStart: "#1e293b",
-    gradEnd: "#0f172a",
-    textColor: "#93c5fd",
-    subColor: "#60a5fa",
-  },
-  {
-    amount: 15,
-    label: "$15",
-    gradStart: "#1f2430",
-    gradEnd: "#12151c",
-    textColor: "#f3f4f6",
-    subColor: "#9ca3af",
-  },
-  {
-    amount: 2500,
-    label: "$2,500",
-    gradStart: "#fbbf24",
-    gradEnd: "#b45309",
-    textColor: "#090b10",
-    subColor: "#451a03",
-  },
-  {
-    amount: 5,
-    label: "$5",
-    gradStart: "#1f2430",
-    gradEnd: "#12151c",
-    textColor: "#f3f4f6",
-    subColor: "#9ca3af",
-  },
-  {
-    amount: 500,
-    label: "$500",
-    gradStart: "#047857",
-    gradEnd: "#064e3b",
-    textColor: "#ecfdf5",
-    subColor: "#6ee7b7",
-  },
-  {
-    amount: 50,
-    label: "$50",
-    gradStart: "#1e293b",
-    gradEnd: "#0f172a",
-    textColor: "#e2e8f0",
-    subColor: "#94a3b8",
-  },
-  {
-    amount: 1500,
-    label: "$1,500",
-    gradStart: "#4338ca",
-    gradEnd: "#1e1b4b",
-    textColor: "#e0e7ff",
-    subColor: "#a5b4fc",
-  },
-];
+export interface MarketEvent {
+  id: string;
+  slug?: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  image?: string;
+  endDate?: string;
+  volume?: number | string;
+  volume24hr?: number | string;
+  tags?: MarketTag[];
+  markets?: MarketSubMarket[];
+}
 
-const SLICE_DEG = 360 / SPIN_SEGMENTS.length;
-const SPIN_DURATION_MS = 4800;
-const ALWAYS_WIN_AMOUNT = 3;
-const MAX_SPIN_DAYS = 5;
-const COOLDOWN_MS = 24 * 60 * 60 * 1000;
+export interface MarketDetailPageProps {
+  event?: MarketEvent | null;
+  initialMarketId?: string | null;
+  initialSide?: string;
+  onBack?: () => void;
+  onSelectEvent?: (event: MarketEvent) => void;
+}
 
-function getSessionEmail(propEmail?: string): string | null {
-  if (propEmail?.trim()) return propEmail.trim();
+interface OutcomeRow {
+  id: string;
+  name: string;
+  yesLabel: string;
+  noLabel: string;
+  yesProb: number;
+  noProb: number;
+  pct: number;
+  volume: number;
+  image?: string;
+  yesTokenId: string | null;
+  noTokenId: string | null;
+  closed: boolean;
+  color: string;
+  delta: number;
+}
+
+interface PricePoint {
+  t: number;
+  p: number;
+}
+
+interface LiveQuote {
+  bid: number;
+  ask: number;
+  mid: number;
+}
+
+interface TradePosition {
+  _id: string;
+  userEmail: string;
+  eventId: string;
+  eventSlug?: string;
+  eventTitle?: string;
+  marketId: string;
+  marketName: string;
+  tokenId: string;
+  side: string;
+  shares: number;
+  entryPrice: number;
+  cost: number;
+  status: string;
+}
+
+interface WsMessage {
+  event_type?: string;
+  asset_id?: string;
+  best_bid?: string;
+  best_ask?: string;
+  price?: string;
+  winning_asset_id?: string;
+  price_changes?: Array<{
+    asset_id: string;
+    price?: string;
+    best_bid?: string;
+    best_ask?: string;
+  }>;
+}
+
+// ---------- Helpers ----------
+function safeParseArray<T = string>(val: unknown, fallback: T[] = []): T[] {
+  if (Array.isArray(val)) return val as T[];
+  if (typeof val === "string") {
+    try {
+      const parsed: unknown = JSON.parse(val);
+      return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function parseCashNumber(val: unknown): number {
+  if (typeof val === "number")
+    return Number.isFinite(val) ? Math.max(0, val) : 0;
+  const cleaned = String(val ?? "0").replace(/[^0-9.-]/g, "");
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? Math.max(0, num) : 0;
+}
+
+function formatCashString(amount: number): string {
+  return `$${Math.max(0, amount).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function readAuthIdentity(): {
+  loggedIn: boolean;
+  userId: string;
+  initialCash: number;
+} {
   try {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { email?: string };
-    return parsed?.email?.trim() || null;
+    if (!raw) return { loggedIn: false, userId: "guest", initialCash: 0 };
+    const user = JSON.parse(raw) as DemoUser;
+    const email = String(user.email || "")
+      .toLowerCase()
+      .trim();
+    return email
+      ? {
+          loggedIn: true,
+          userId: email,
+          initialCash: parseCashNumber(user.cash),
+        }
+      : { loggedIn: false, userId: "guest", initialCash: 0 };
   } catch {
-    return null;
+    return { loggedIn: false, userId: "guest", initialCash: 0 };
   }
 }
 
-function polarToCartesian(cx: number, cy: number, r: number, angleDeg: number) {
-  const rad = ((angleDeg - 90) * Math.PI) / 180;
+async function buildAuthHeaders(
+  extra?: Record<string, string>,
+): Promise<Record<string, string>> {
+  const token = await getFirebaseToken();
   return {
-    x: cx + r * Math.cos(rad),
-    y: cy + r * Math.sin(rad),
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
   };
 }
 
-function buildSlicePath(
-  cx: number,
-  cy: number,
-  r: number,
-  startDeg: number,
-  endDeg: number,
-): string {
-  const start = polarToCartesian(cx, cy, r, endDeg);
-  const end = polarToCartesian(cx, cy, r, startDeg);
-  const largeArc = endDeg - startDeg <= 180 ? "0" : "1";
-  return `M ${cx} ${cy} L ${start.x.toFixed(2)} ${start.y.toFixed(
-    2,
-  )} A ${r} ${r} 0 ${largeArc} 0 ${end.x.toFixed(2)} ${end.y.toFixed(2)} Z`;
+function syncLocalCash(nextCash: number): void {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return;
+    const user = JSON.parse(raw) as DemoUser;
+    user.cash = Number(nextCash.toFixed(2));
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+    window.dispatchEvent(new Event("promarkets-auth-change"));
+  } catch {
+    // ignore storage errors
+  }
 }
 
-function formatCountdown(ms: number): string {
-  const totalSec = Math.max(0, Math.ceil(ms / 1000));
-  const hrs = Math.floor(totalSec / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
-  const secs = totalSec % 60;
-  return [hrs, mins, secs].map((v) => String(v).padStart(2, "0")).join(":");
+function formatDollarVol(vol: number | string | undefined): string {
+  const num = Number(vol) || 0;
+  return `$${Math.round(num).toLocaleString("en-US")} Vol.`;
 }
 
-export function RewardsPage({
-  userEmail,
-  hasFirstDeposit: controlledDeposit,
-  onDepositClick,
-  onSignupClick,
-  onClaimBonus,
-}: RewardsPageProps) {
-  const navigate = useNavigate();
+function formatCents(prob: number): string {
+  const cents = Math.round((Number(prob) || 0) * 1000) / 10;
+  return `${Number.isInteger(cents) ? cents : cents.toFixed(1)}¢`;
+}
 
-  const [activeEmail, setActiveEmail] = useState<string | null>(() =>
-    getSessionEmail(userEmail),
+function formatDateShort(iso?: string): string {
+  if (!iso) return "TBD";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "TBD";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatAxisTime(unixSec: number, interval: string): string {
+  const d = new Date(unixSec * 1000);
+  if (interval === "1h" || interval === "6h" || interval === "1d") {
+    return d.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatTooltipTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function buildFallbackSeries(
+  endProb: number,
+  count = 40,
+  seed = 1,
+): PricePoint[] {
+  const now = Math.floor(Date.now() / 1000);
+  const step = 6 * 3600;
+  const arr: PricePoint[] = [];
+  const val = Math.min(0.95, Math.max(0.05, endProb + ((seed % 3) - 1) * 0.08));
+  for (let i = 0; i < count; i++) {
+    const t = now - (count - 1 - i) * step;
+    const wave = Math.sin((i + seed * 3) * 0.45) * 0.035;
+    const progress = i / (count - 1);
+    const p =
+      i === count - 1
+        ? endProb
+        : Math.max(
+            0.01,
+            Math.min(0.99, val * (1 - progress) + endProb * progress + wave),
+          );
+    arr.push({ t, p });
+  }
+  return arr;
+}
+
+async function fetchClobHistoryWithFallback(
+  tokenId: string,
+  interval: string,
+  fidelity: number,
+  signal?: AbortSignal,
+): Promise<PricePoint[] | null> {
+  const attempts =
+    interval === "max"
+      ? [
+          { interval: "max", fidelity },
+          { interval: "max", fidelity: 60 },
+          { interval: "1d", fidelity: 15 },
+        ]
+      : [{ interval, fidelity }];
+
+  for (const attempt of attempts) {
+    try {
+      const url = `${CLOB_API}/prices-history?market=${encodeURIComponent(
+        tokenId,
+      )}&interval=${attempt.interval}&fidelity=${attempt.fidelity}`;
+      const res = await fetch(url, { signal });
+      if (!res.ok) continue;
+      const json = (await res.json()) as {
+        history?: Array<{ t: number | string; p: number | string }>;
+      };
+      const hist = Array.isArray(json.history) ? json.history : [];
+      if (hist.length >= 2) {
+        return hist.map((pt) => ({
+          t: Number(pt.t),
+          p: Number(pt.p),
+        }));
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+    }
+  }
+  return null;
+}
+
+export default function MarketDetailPage({
+  event,
+  initialMarketId = null,
+  initialSide = "Yes",
+  onBack,
+  onSelectEvent,
+}: MarketDetailPageProps) {
+  const [timeframe, setTimeframe] = useState<string>("1D");
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [seriesMap, setSeriesMap] = useState<Record<string, PricePoint[]>>({});
+  const [tradeTab, setTradeTab] = useState<"Buy" | "Sell">("Buy");
+  const [amount, setAmount] = useState<string>("");
+  const [orderNotice, setOrderNotice] = useState<string>("");
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [bookmarked, setBookmarked] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [relatedEvents, setRelatedEvents] = useState<MarketEvent[]>([]);
+  const [relatedFilter, setRelatedFilter] = useState<string>("All");
+
+  // Synced user identity + backend cash + backend positions
+  const [authState, setAuthState] = useState(() => readAuthIdentity());
+  const [cash, setCash] = useState<number>(
+    () => readAuthIdentity().initialCash,
   );
-  const [dbUser, setDbUser] = useState<DbUser | null>(null);
-  const [isLoadingDb, setIsLoadingDb] = useState<boolean>(false);
-  const [spinError, setSpinError] = useState<string | null>(null);
-  const [now, setNow] = useState<number>(() => Date.now());
+  const [loadingCash, setLoadingCash] = useState<boolean>(false);
 
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [isSpinning, setIsSpinning] = useState<boolean>(false);
-  const [rotation, setRotation] = useState<number>(0);
-  const [justWonDay, setJustWonDay] = useState<number | null>(null);
-  const [ledTick, setLedTick] = useState<number>(0);
-  const spinTimerRef = useRef<number | null>(null);
+  const [livePrices, setLivePrices] = useState<Record<string, LiveQuote>>({});
+  const [resolvedMap, setResolvedMap] = useState<Record<string, 0 | 1>>({});
+  const [positions, setPositions] = useState<TradePosition[]>([]);
+  const [modalTradeId, setModalTradeId] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const settlingTokensRef = useRef<Set<string>>(new Set());
 
-  // Fetch user, hasFirstDeposit, cash, and spins directly from MongoDB
-  const fetchUserFromDatabase = useCallback(async (email: string | null) => {
-    if (!email) {
-      setDbUser(null);
+  const isLoggedIn = authState.loggedIn;
+  const userId = authState.userId;
+
+  const fetchUserCash = useCallback(async (email: string) => {
+    if (!email || email === "guest") {
+      setCash(0);
       return;
     }
-
-    setIsLoadingDb(true);
-    setSpinError(null);
-
+    setLoadingCash(true);
     try {
-      const token = await getFirebaseToken();
-      if (!token) {
-        setDbUser(null);
-        return;
-      }
-
+      const headers = await buildAuthHeaders();
       const res = await fetch(
-        `${API_BASE_URL}/users/${encodeURIComponent(email)}`,
+        `${API_BASE}/users/${encodeURIComponent(email)}`,
         {
-          cache: "no-store",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          credentials: "include",
+          headers,
         },
       );
-      const json = await res.json().catch(() => null);
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        success?: boolean;
+        cash?: number | string;
+        data?: { cash?: number | string };
+        user?: { cash?: number | string };
+      };
+      const rawCash = json?.data?.cash ?? json?.user?.cash ?? json?.cash;
+      if (rawCash !== undefined) {
+        const backendCash = parseCashNumber(rawCash);
+        setCash(backendCash);
+      }
+    } catch {
+      // ignore transient network errors
+    } finally {
+      setLoadingCash(false);
+    }
+  }, []);
 
-      if (!res.ok || !json?.success || !json?.data) {
-        setIsSpinning(false);
-        setSpinError(
-          json?.message || json?.error || `Server error (${res.status})`,
-        );
+  const fetchOpenTrades = useCallback(
+    async (email: string, eventId?: string) => {
+      if (!email || email === "guest" || !eventId) {
+        setPositions([]);
         return;
       }
-
-      if (json?.success && json?.data) {
-        setDbUser({
-          ...json.data,
-          cash: Number(json.data.cash || 0),
-          hasFirstDeposit: Boolean(json.data.hasFirstDeposit),
-          spins: Array.isArray(json.data.spins) ? json.data.spins : [],
-        });
-      }
-    } catch (err) {
-      console.error("Network error loading rewards from database:", err);
-      setSpinError(`Cannot reach ${API_BASE_URL}. Check server port & CORS.`);
-    } finally {
-      setIsLoadingDb(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const email = getSessionEmail(userEmail);
-    setActiveEmail(email);
-    fetchUserFromDatabase(email);
-  }, [userEmail, fetchUserFromDatabase]);
-
-  // Re-fetch directly from database whenever auth or deposit changes
-  useEffect(() => {
-    const handleSync = () => {
-      const email = getSessionEmail(userEmail);
-      setActiveEmail(email);
-      fetchUserFromDatabase(email);
-    };
-
-    window.addEventListener("promarkets-auth-change", handleSync);
-    window.addEventListener("promarkets-deposit-success", handleSync);
-    window.addEventListener("storage", handleSync);
-
-    return () => {
-      window.removeEventListener("promarkets-auth-change", handleSync);
-      window.removeEventListener("promarkets-deposit-success", handleSync);
-      window.removeEventListener("storage", handleSync);
-    };
-  }, [userEmail, fetchUserFromDatabase]);
-
-  const isLoggedIn = Boolean(activeEmail);
-  const spins: SpinRecord[] = dbUser?.spins ?? [];
-  const hasFirstDeposit =
-    isLoggedIn &&
-    (Boolean(controlledDeposit) ||
-      Boolean(dbUser?.hasFirstDeposit) ||
-      Number(dbUser?.cash || 0) > 0 ||
-      spins.length > 0);
-
-  const completedCount = spins.length;
-  const isAllCompleted = completedCount >= MAX_SPIN_DAYS;
-  const lastSpin = completedCount > 0 ? spins[completedCount - 1] : null;
-  const remainingMs =
-    lastSpin && !isAllCompleted
-      ? Math.max(0, lastSpin.spunAt + COOLDOWN_MS - now)
-      : 0;
-  const canSpinNow =
-    isLoggedIn &&
-    hasFirstDeposit &&
-    !isAllCompleted &&
-    remainingMs === 0 &&
-    !isSpinning;
-  const currentDay = Math.min(MAX_SPIN_DAYS, completedCount + 1);
-  const totalWonUsd = spins.reduce((sum, s) => sum + s.amount, 0);
-
-  // Live 1-second countdown for the 24h cooldown
-  useEffect(() => {
-    if (!lastSpin || isAllCompleted) return;
-    const id = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [lastSpin, isAllCompleted]);
-
-  // Chasing LED bulbs animation around the wheel rim
-  useEffect(() => {
-    if (!isModalOpen) return;
-    const speed = isSpinning ? 90 : 450;
-    const id = window.setInterval(() => {
-      setLedTick((t) => (t + 1) % 24);
-    }, speed);
-    return () => window.clearInterval(id);
-  }, [isModalOpen, isSpinning]);
-
-  useEffect(() => {
-    return () => {
-      if (spinTimerRef.current) window.clearTimeout(spinTimerRef.current);
-    };
-  }, []);
-
-  const handleSignupRedirect = () => {
-    setIsModalOpen(false);
-    if (onSignupClick) {
-      onSignupClick();
-      return;
-    }
-    navigate("/signup");
-  };
-
-  const handleDepositUnlock = () => {
-    if (!isLoggedIn) {
-      handleSignupRedirect();
-      return;
-    }
-    if (onDepositClick) {
-      onDepositClick();
-      return;
-    }
-    setIsModalOpen(false);
-    window.dispatchEvent(new Event("open-deposit-modal"));
-  };
-
-  const triggerSpin = () => {
-    if (!canSpinNow || !activeEmail) return;
-
-    setSpinError(null);
-
-    const winIndex = SPIN_SEGMENTS.findIndex(
-      (s) => s.amount === ALWAYS_WIN_AMOUNT,
-    );
-    const sliceCenter = winIndex * SLICE_DEG + SLICE_DEG / 2;
-    const currentMod = ((rotation % 360) + 360) % 360;
-    const desiredMod = (((360 - sliceCenter) % 360) + 360) % 360;
-    const deltaMod = (desiredMod - currentMod + 360) % 360;
-    const jitter = (Math.random() - 0.5) * 10;
-
-    const nextRotation = rotation + 360 * 7 + deltaMod + jitter;
-    const spunDay = completedCount + 1;
-
-    setIsSpinning(true);
-    setJustWonDay(null);
-    setRotation(nextRotation);
-
-    spinTimerRef.current = window.setTimeout(async () => {
       try {
-        const token = await getFirebaseToken();
-        if (!token) {
-          setIsSpinning(false);
-          setSpinError("Session expired. Please log in again.");
-          return;
-        }
-
-        const res = await fetch(`${API_BASE_URL}/users/spin`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
+        const headers = await buildAuthHeaders();
+        const res = await fetch(
+          `${API_BASE}/trades/${encodeURIComponent(
+            email,
+          )}?status=OPEN&eventId=${encodeURIComponent(eventId)}`,
+          {
+            credentials: "include",
+            headers,
           },
-          body: JSON.stringify({ email: activeEmail }),
-        });
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          success?: boolean;
+          data?: TradePosition[];
+        };
+        if (json.success && Array.isArray(json.data)) {
+          setPositions(json.data);
+        }
+      } catch {
+        // ignore transient network errors
+      }
+    },
+    [],
+  );
 
-        const json = await res.json().catch(() => null);
-        if (!res.ok || !json?.success || !json?.data) {
-          setIsSpinning(false);
-          setSpinError(json?.message || "Unable to claim spin reward.");
+  // Load cash & open trades from backend and listen for auth/balance updates
+  useEffect(() => {
+    void fetchUserCash(userId);
+    void fetchOpenTrades(userId, event?.id);
+
+    const syncAuth = () => {
+      const next = readAuthIdentity();
+      setAuthState(next);
+      if (next.initialCash > 0) setCash(next.initialCash);
+      void fetchUserCash(next.userId);
+      void fetchOpenTrades(next.userId, event?.id);
+    };
+
+    window.addEventListener("promarkets-auth-change", syncAuth);
+    window.addEventListener("storage", syncAuth);
+    return () => {
+      window.removeEventListener("promarkets-auth-change", syncAuth);
+      window.removeEventListener("storage", syncAuth);
+    };
+  }, [userId, event?.id, fetchUserCash, fetchOpenTrades]);
+
+  // Parse active sub-markets sorted by highest Yes probability
+  const outcomesList = useMemo<OutcomeRow[]>(() => {
+    if (!event) return [];
+    const raw = (event.markets || []).filter((m) => m.active !== false);
+    const list = (raw.length > 0 ? raw : event.markets || []).map((m, idx) => {
+      const prices = safeParseArray<string>(m.outcomePrices, ["0.5", "0.5"]);
+      const outcomes = safeParseArray<string>(m.outcomes, ["Yes", "No"]);
+      const clobTokens = safeParseArray<string>(m.clobTokenIds, []);
+      const posTokens = safeParseArray<string>(m.positionIds, []);
+      const tokens = clobTokens.length > 0 ? clobTokens : posTokens;
+
+      const yesProb = parseFloat(prices[0]) || 0;
+      const noProb = parseFloat(prices[1]) || Math.max(0, 1 - yesProb);
+
+      return {
+        id: m.id || `m-${idx}`,
+        name:
+          m.groupItemTitle || m.question || outcomes[0] || `Option ${idx + 1}`,
+        yesLabel: outcomes[0] || "Yes",
+        noLabel: outcomes[1] || "No",
+        yesProb,
+        noProb,
+        pct: Math.round(yesProb * 100),
+        volume: Number(m.volume || m.volumeNum || 0),
+        image: m.image || m.icon || event.icon || event.image,
+        yesTokenId: tokens[0] || null,
+        noTokenId: tokens[1] || null,
+        closed: Boolean(m.closed),
+        color: LINE_COLORS[idx % LINE_COLORS.length],
+        delta: (idx % 2 === 0 ? 1 : -1) * ((idx % 3) + 1),
+      };
+    });
+
+    return list.sort((a, b) => b.yesProb - a.yesProb);
+  }, [event]);
+
+  const topChartOutcomes = useMemo(
+    () => outcomesList.slice(0, 4),
+    [outcomesList],
+  );
+  const topChartRef = useRef<OutcomeRow[]>(topChartOutcomes);
+  useEffect(() => {
+    topChartRef.current = topChartOutcomes;
+  }, [topChartOutcomes]);
+
+  // Selected outcome & side in Right Trade Card
+  const [selectedOutcomeId, setSelectedOutcomeId] = useState<string>(
+    () => initialMarketId || topChartOutcomes[0]?.id || "",
+  );
+  const [selectedSide, setSelectedSide] = useState<string>(
+    initialSide || "Yes",
+  );
+
+  useEffect(() => {
+    setSelectedOutcomeId(initialMarketId || outcomesList[0]?.id || "");
+    setSelectedSide(initialSide || "Yes");
+    setAmount("");
+    setOrderNotice("");
+  }, [event?.id, initialMarketId, initialSide, outcomesList]);
+
+  const activeOutcome =
+    outcomesList.find((o) => o.id === selectedOutcomeId) || outcomesList[0];
+
+  // 1. Live WebSocket for Real-Time Prices + Dynamic Chart Point Updates + Resolution
+  useEffect(() => {
+    const assetIds = outcomesList
+      .flatMap((o) => [o.yesTokenId, o.noTokenId])
+      .filter((id): id is string => Boolean(id));
+
+    if (assetIds.length === 0) return;
+
+    let ws: WebSocket | null = null;
+    let pingTimer: number | undefined;
+    let reconnectTimer: number | undefined;
+    let closedByCleanup = false;
+
+    const pushLiveChartTick = (assetId: string, price: number) => {
+      const chartList = topChartRef.current;
+      const matchedYes = chartList.find((o) => o.yesTokenId === assetId);
+      const matchedNo = chartList.find((o) => o.noTokenId === assetId);
+      const target = matchedYes || matchedNo;
+      if (!target) return;
+
+      const yesP = matchedYes
+        ? price
+        : Math.max(0.005, Math.min(0.995, 1 - price));
+      const nowSec = Math.floor(Date.now() / 1000);
+
+      setSeriesMap((prev) => {
+        const existing = prev[target.id];
+        if (!existing || existing.length === 0) return prev;
+        const last = existing[existing.length - 1];
+        const nextSeries =
+          nowSec - last.t >= 15
+            ? [...existing.slice(-119), { t: nowSec, p: yesP }]
+            : [...existing.slice(0, -1), { t: nowSec, p: yesP }];
+        return { ...prev, [target.id]: nextSeries };
+      });
+    };
+
+    const connect = () => {
+      ws = new WebSocket(WS_MARKET_URL);
+
+      ws.onopen = () => {
+        setWsConnected(true);
+        ws?.send(
+          JSON.stringify({
+            assets_ids: assetIds,
+            type: "market",
+            custom_feature_enabled: true,
+          }),
+        );
+        pingTimer = window.setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send("PING");
+          }
+        }, 10_000);
+      };
+
+      ws.onmessage = (evt: MessageEvent<string>) => {
+        if (evt.data === "PONG") return;
+        let msgs: WsMessage[];
+        try {
+          const parsed: unknown = JSON.parse(evt.data);
+          msgs = Array.isArray(parsed)
+            ? (parsed as WsMessage[])
+            : [parsed as WsMessage];
+        } catch {
           return;
         }
 
-        const updatedDbUser: DbUser = {
-          ...json.data,
-          cash: Number(json.data.cash || 0),
-          hasFirstDeposit: Boolean(json.data.hasFirstDeposit),
-          spins: Array.isArray(json.data.spins) ? json.data.spins : [],
+        msgs.forEach((msg) => {
+          if (msg.event_type === "best_bid_ask" && msg.asset_id) {
+            const bid = parseFloat(msg.best_bid || "0") || 0;
+            const ask = parseFloat(msg.best_ask || "0") || 0;
+            const mid = bid && ask ? (bid + ask) / 2 : ask || bid;
+            const assetId = msg.asset_id;
+            if (mid > 0) {
+              setLivePrices((prev) => ({
+                ...prev,
+                [assetId]: { bid: bid || mid, ask: ask || mid, mid },
+              }));
+              pushLiveChartTick(assetId, mid);
+            }
+          }
+
+          if (
+            msg.event_type === "price_change" &&
+            Array.isArray(msg.price_changes)
+          ) {
+            setLivePrices((prev) => {
+              const next = { ...prev };
+              msg.price_changes?.forEach((c) => {
+                const p = parseFloat(c.price || "0") || 0;
+                const bid =
+                  parseFloat(c.best_bid || "0") || prev[c.asset_id]?.bid || p;
+                const ask =
+                  parseFloat(c.best_ask || "0") || prev[c.asset_id]?.ask || p;
+                const mid = bid && ask ? (bid + ask) / 2 : p;
+                if (mid > 0) {
+                  next[c.asset_id] = {
+                    bid: bid || mid,
+                    ask: ask || mid,
+                    mid,
+                  };
+                  pushLiveChartTick(c.asset_id, mid);
+                }
+              });
+              return next;
+            });
+          }
+
+          if (msg.event_type === "last_trade_price" && msg.asset_id) {
+            const p = parseFloat(msg.price || "0") || 0;
+            const assetId = msg.asset_id;
+            if (p > 0) {
+              setLivePrices((prev) => ({
+                ...prev,
+                [assetId]: {
+                  bid: prev[assetId]?.bid || p,
+                  ask: prev[assetId]?.ask || p,
+                  mid: p,
+                },
+              }));
+              pushLiveChartTick(assetId, p);
+            }
+          }
+
+          if (msg.event_type === "market_resolved" && msg.winning_asset_id) {
+            const winId = msg.winning_asset_id;
+            const matched = outcomesList.find(
+              (o) => o.yesTokenId === winId || o.noTokenId === winId,
+            );
+            setResolvedMap((prev) => {
+              const next: Record<string, 0 | 1> = { ...prev, [winId]: 1 };
+              if (matched) {
+                if (matched.yesTokenId && matched.yesTokenId !== winId) {
+                  next[matched.yesTokenId] = 0;
+                }
+                if (matched.noTokenId && matched.noTokenId !== winId) {
+                  next[matched.noTokenId] = 0;
+                }
+              }
+              return next;
+            });
+          }
+        });
+      };
+
+      ws.onclose = () => {
+        setWsConnected(false);
+        if (pingTimer) window.clearInterval(pingTimer);
+        if (!closedByCleanup) {
+          reconnectTimer = window.setTimeout(connect, 2500);
+        }
+      };
+
+      ws.onerror = () => {
+        ws?.close();
+      };
+    };
+
+    connect();
+    return () => {
+      closedByCleanup = true;
+      setWsConnected(false);
+      if (pingTimer) window.clearInterval(pingTimer);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, [outcomesList]);
+
+  // 2. Poll Gamma Every 10s as Backup for Live Prices & Market Resolution Results
+  useEffect(() => {
+    if (!event?.slug) return;
+    let cancelled = false;
+
+    const checkResult = async () => {
+      try {
+        const res = await fetch(
+          `${GAMMA_API}/events/slug/${encodeURIComponent(event.slug!)}`,
+        );
+        if (!res.ok) return;
+        const ev = (await res.json()) as MarketEvent;
+        if (cancelled) return;
+
+        (ev.markets || []).forEach((m) => {
+          const prices = safeParseArray<string>(m.outcomePrices, []);
+          const clobTokens = safeParseArray<string>(m.clobTokenIds, []);
+          const posTokens = safeParseArray<string>(m.positionIds, []);
+          const tokens = clobTokens.length > 0 ? clobTokens : posTokens;
+
+          const p0 = parseFloat(prices[0]);
+          const p1 = parseFloat(prices[1]);
+
+          if (m.closed && ((p0 === 1 && p1 === 0) || (p0 === 0 && p1 === 1))) {
+            setResolvedMap((prev) => ({
+              ...prev,
+              ...(tokens[0] ? { [tokens[0]]: p0 as 0 | 1 } : {}),
+              ...(tokens[1] ? { [tokens[1]]: p1 as 0 | 1 } : {}),
+            }));
+          } else {
+            if (tokens[0] && Number.isFinite(p0) && p0 > 0) {
+              setLivePrices((prev) =>
+                prev[tokens[0]]
+                  ? prev
+                  : { ...prev, [tokens[0]]: { bid: p0, ask: p0, mid: p0 } },
+              );
+            }
+            if (tokens[1] && Number.isFinite(p1) && p1 > 0) {
+              setLivePrices((prev) =>
+                prev[tokens[1]]
+                  ? prev
+                  : { ...prev, [tokens[1]]: { bid: p1, ask: p1, mid: p1 } },
+              );
+            }
+          }
+        });
+      } catch {
+        // ignore transient network errors
+      }
+    };
+
+    void checkResult();
+    const id = window.setInterval(checkResult, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [event?.slug]);
+
+  // 3. Auto-Settle Open Positions via POST /api/v1/trades/settle
+  useEffect(() => {
+    if (!isLoggedIn || positions.length === 0) return;
+
+    const toSettle = positions.filter((pos) => {
+      const result = resolvedMap[pos.tokenId];
+      return (
+        (result === 0 || result === 1) &&
+        !settlingTokensRef.current.has(pos.tokenId)
+      );
+    });
+
+    if (toSettle.length === 0) return;
+
+    const settleAll = async () => {
+      const headers = await buildAuthHeaders();
+      for (const pos of toSettle) {
+        const result = resolvedMap[pos.tokenId];
+        if (result !== 0 && result !== 1) continue;
+        settlingTokensRef.current.add(pos.tokenId);
+
+        try {
+          const res = await fetch(`${API_BASE}/trades/settle`, {
+            method: "POST",
+            credentials: "include",
+            headers,
+            body: JSON.stringify({
+              email: userId,
+              tokenId: pos.tokenId,
+              result,
+            }),
+          });
+          const json = (await res.json()) as {
+            success?: boolean;
+            data?: {
+              settledCount?: number;
+              totalPayout?: number;
+              cash?: number | null;
+            };
+          };
+          if (res.ok && json.success && json.data) {
+            if (typeof json.data.cash === "number") {
+              setCash(json.data.cash);
+              syncLocalCash(json.data.cash);
+            }
+            setPositions((prev) =>
+              prev.filter((p) => p.tokenId !== pos.tokenId),
+            );
+            const payout = json.data.totalPayout ?? 0;
+            setOrderNotice(
+              payout > 0
+                ? `Market resolved! Settled +$${payout.toFixed(2)} payout to your cash.`
+                : "Market resolved. Position settled at $0.00.",
+            );
+          }
+        } catch {
+          settlingTokensRef.current.delete(pos.tokenId);
+        }
+      }
+    };
+
+    void settleAll();
+  }, [resolvedMap, positions, isLoggedIn, userId]);
+
+  // 4. Fetch & Auto-Refresh CLOB Price History for Top 4 Lines
+  useEffect(() => {
+    if (topChartOutcomes.length === 0) return;
+    const controller = new AbortController();
+    const tf = TIMEFRAMES.find((t) => t.label === timeframe) || TIMEFRAMES[2];
+
+    async function loadHistory() {
+      try {
+        const entries: Array<[string, PricePoint[]]> = await Promise.all(
+          topChartOutcomes.map(
+            async (item, idx): Promise<[string, PricePoint[]]> => {
+              if (!item.yesTokenId) {
+                return [
+                  item.id,
+                  buildFallbackSeries(item.yesProb, 44, idx + 1),
+                ];
+              }
+              const fetched = await fetchClobHistoryWithFallback(
+                item.yesTokenId,
+                tf.interval,
+                tf.fidelity,
+                controller.signal,
+              );
+              if (fetched && fetched.length >= 2) {
+                return [item.id, fetched];
+              }
+              return [item.id, buildFallbackSeries(item.yesProb, 44, idx + 1)];
+            },
+          ),
+        );
+
+        if (!controller.signal.aborted) {
+          setSeriesMap(Object.fromEntries(entries));
+        }
+      } catch (err: unknown) {
+        if (!(err instanceof Error && err.name === "AbortError")) {
+          console.error("Chart history error:", err);
+        }
+      }
+    }
+
+    void loadHistory();
+
+    const isShortTf =
+      timeframe === "1H" || timeframe === "6H" || timeframe === "1D";
+    const refreshId = isShortTf
+      ? window.setInterval(loadHistory, 30_000)
+      : undefined;
+
+    return () => {
+      controller.abort();
+      if (refreshId) window.clearInterval(refreshId);
+    };
+  }, [topChartOutcomes, timeframe]);
+
+  // 5. Fetch related markets from Polymarket
+  useEffect(() => {
+    if (!event?.id) return;
+    let cancelled = false;
+    const tagSlug =
+      relatedFilter !== "All" ? relatedFilter : event.tags?.[0]?.slug || "tech";
+
+    fetch(
+      `${GAMMA_API}/events?active=true&closed=false&tag_slug=${encodeURIComponent(
+        tagSlug,
+      )}&limit=6&order=volume_24hr&ascending=false`,
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: unknown) => {
+        if (cancelled || !Array.isArray(data)) return;
+        setRelatedEvents(
+          (data as MarketEvent[]).filter((e) => e.id !== event.id).slice(0, 4),
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [event, relatedFilter]);
+
+  // Dynamic Chart Geometry Calculations
+  const chartW = 720;
+  const chartH = 250;
+
+  const { minY, maxY, ticksY, baseTimeline } = useMemo(() => {
+    let minVal = 1;
+    let maxVal = 0;
+    let longestSeries: PricePoint[] = [];
+
+    topChartOutcomes.forEach((o) => {
+      const s = seriesMap[o.id] || [];
+      if (s.length > longestSeries.length) longestSeries = s;
+      s.forEach((pt) => {
+        if (pt.p < minVal) minVal = pt.p;
+        if (pt.p > maxVal) maxVal = pt.p;
+      });
+    });
+
+    if (longestSeries.length === 0 || minVal > maxVal) {
+      minVal = 0;
+      maxVal = 1;
+    }
+
+    const span = maxVal - minVal;
+    const pad = Math.max(0.03, span * 0.15);
+    const rawMinPct = Math.max(0, Math.floor(((minVal - pad) * 100) / 5) * 5);
+    const rawMaxPct = Math.min(100, Math.ceil(((maxVal + pad) * 100) / 5) * 5);
+
+    const finalMinPct =
+      rawMaxPct - rawMinPct < 15 ? Math.max(0, rawMaxPct - 20) : rawMinPct;
+    const finalMaxPct =
+      rawMaxPct - finalMinPct < 15
+        ? Math.min(100, finalMinPct + 20)
+        : rawMaxPct;
+
+    const totalRange = finalMaxPct - finalMinPct;
+    const step = totalRange <= 25 ? 5 : totalRange <= 50 ? 10 : 20;
+    const ticks: number[] = [];
+    for (let v = finalMaxPct; v >= finalMinPct; v -= step) {
+      ticks.push(v);
+    }
+    if (ticks[ticks.length - 1] !== finalMinPct) {
+      ticks.push(finalMinPct);
+    }
+
+    return {
+      minY: finalMinPct / 100,
+      maxY: finalMaxPct / 100,
+      ticksY: ticks,
+      baseTimeline: longestSeries,
+    };
+  }, [topChartOutcomes, seriesMap]);
+
+  const ySpan = Math.max(0.01, maxY - minY);
+  const toChartY = (prob: number): number =>
+    Math.max(
+      3,
+      Math.min(chartH - 3, chartH - ((prob - minY) / ySpan) * chartH),
+    );
+
+  const xTicks = useMemo(() => {
+    if (baseTimeline.length < 4) return [];
+    const indices = [0, 0.33, 0.66, 0.92].map((r) =>
+      Math.min(baseTimeline.length - 1, Math.floor(r * baseTimeline.length)),
+    );
+    const tf = TIMEFRAMES.find((t) => t.label === timeframe) || TIMEFRAMES[2];
+    return indices.map((i) => ({
+      x: (i / Math.max(1, baseTimeline.length - 1)) * chartW,
+      label: formatAxisTime(baseTimeline[i].t, tf.interval),
+    }));
+  }, [baseTimeline, timeframe]);
+
+  const relatedTags = useMemo(() => {
+    const tags = (event?.tags || [])
+      .filter((t): t is { label: string; slug: string } =>
+        Boolean(t?.label && t?.slug),
+      )
+      .slice(0, 4)
+      .map((t) => ({ label: t.label, slug: t.slug }));
+    return [{ label: "All", slug: "All" }, ...tags];
+  }, [event]);
+
+  if (!event) {
+    return (
+      <div className="min-h-screen bg-[#0d1016] text-white flex flex-col items-center justify-center p-6">
+        <p className="text-gray-400 text-sm mb-3">No market event selected.</p>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-semibold"
+          >
+            Back to Markets
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (baseTimeline.length < 2) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(
+      0,
+      Math.min(1, (e.clientX - rect.left) / rect.width),
+    );
+    const idx = Math.round(ratio * (baseTimeline.length - 1));
+    setHoverIdx(idx);
+  };
+
+  // Live Helper for Outcome Display & Trade Execution
+  const getLiveOutcomeProb = (o: OutcomeRow, side: "yes" | "no"): number => {
+    const token = side === "yes" ? o.yesTokenId : o.noTokenId;
+    if (token && resolvedMap[token] !== undefined) {
+      return resolvedMap[token];
+    }
+    if (token && livePrices[token]) {
+      return livePrices[token].mid;
+    }
+    return side === "yes" ? o.yesProb : o.noProb;
+  };
+
+  const getPositionLivePrice = (pos: TradePosition): number => {
+    const o = outcomesList.find((x) => x.id === pos.marketId);
+    const isYes = pos.side === (o?.yesLabel || "Yes");
+    if (pos.tokenId && resolvedMap[pos.tokenId] !== undefined) {
+      return resolvedMap[pos.tokenId];
+    }
+    if (pos.tokenId && livePrices[pos.tokenId]?.bid) {
+      return livePrices[pos.tokenId].bid;
+    }
+    return o ? getLiveOutcomeProb(o, isYes ? "yes" : "no") : pos.entryPrice;
+  };
+
+  const yesToken = activeOutcome?.yesTokenId ?? null;
+  const noToken = activeOutcome?.noTokenId ?? null;
+
+  const liveYesPrice =
+    yesToken && resolvedMap[yesToken] !== undefined
+      ? resolvedMap[yesToken]
+      : (yesToken &&
+          (tradeTab === "Buy"
+            ? livePrices[yesToken]?.ask
+            : livePrices[yesToken]?.bid)) ||
+        activeOutcome?.yesProb ||
+        0.5;
+
+  const liveNoPrice =
+    noToken && resolvedMap[noToken] !== undefined
+      ? resolvedMap[noToken]
+      : (noToken &&
+          (tradeTab === "Buy"
+            ? livePrices[noToken]?.ask
+            : livePrices[noToken]?.bid)) ||
+        activeOutcome?.noProb ||
+        0.5;
+
+  const isYesSelected = selectedSide === (activeOutcome?.yesLabel || "Yes");
+  const activeTokenId = isYesSelected ? yesToken : noToken;
+  const activePrice = isYesSelected ? liveYesPrice : liveNoPrice;
+
+  const resolutionStatus =
+    (yesToken && resolvedMap[yesToken] !== undefined) ||
+    (noToken && resolvedMap[noToken] !== undefined)
+      ? resolvedMap[yesToken ?? ""] === 1
+        ? activeOutcome?.yesLabel || "Yes"
+        : activeOutcome?.noLabel || "No"
+      : null;
+
+  const isMarketResolved = Boolean(resolutionStatus || activeOutcome?.closed);
+
+  const currentPos = positions.find(
+    (p) => p.marketId === activeOutcome?.id && p.side === selectedSide,
+  );
+  const currentPosValue = currentPos ? currentPos.shares * activePrice : 0;
+
+  const numAmount = parseFloat(amount) || 0;
+  const estShares = activePrice > 0 ? numAmount / activePrice : 0;
+
+  const handleClosePosition = async (pos: TradePosition) => {
+    if (!isLoggedIn) {
+      setOrderNotice("Please log in to close a position.");
+      setModalTradeId(null);
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const headers = await buildAuthHeaders();
+      const closePrice = Math.min(1, Math.max(0, getPositionLivePrice(pos)));
+      const res = await fetch(`${API_BASE}/trades/close`, {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({
+          email: userId,
+          tradeId: pos._id,
+          closePrice,
+        }),
+      });
+      const json = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        data?: { proceeds: number; cash: number };
+      };
+      if (!res.ok || !json.success || !json.data) {
+        setOrderNotice(json.message || "Failed to close position.");
+        return;
+      }
+      setCash(json.data.cash);
+      syncLocalCash(json.data.cash);
+      setPositions((prev) => prev.filter((p) => p._id !== pos._id));
+      setModalTradeId(null);
+      setOrderNotice(
+        `Closed ${pos.shares.toFixed(2)} ${pos.side} shares — +$${json.data.proceeds.toFixed(
+          2,
+        )} added to cash.`,
+      );
+    } catch {
+      setOrderNotice("Network error while closing position.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleExecuteTrade = async () => {
+    if (!isLoggedIn) {
+      setOrderNotice("Please log in to place a trade.");
+      return;
+    }
+    if (loadingCash || isSubmitting || !activeOutcome) return;
+    if (isMarketResolved) {
+      setOrderNotice("Trading closed — this market has already resolved.");
+      return;
+    }
+    if (tradeTab === "Buy" && cash <= 0) {
+      window.dispatchEvent(new Event("open-deposit-modal"));
+      return;
+    }
+    if (numAmount <= 0) {
+      setOrderNotice("Enter an amount greater than $0.");
+      return;
+    }
+    if (activePrice <= 0 || activePrice >= 1) {
+      setOrderNotice("Price unavailable for this side.");
+      return;
+    }
+
+    if (tradeTab === "Buy") {
+      if (numAmount > cash) {
+        setOrderNotice("Insufficient cash balance. Please deposit funds.");
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        const headers = await buildAuthHeaders();
+        const res = await fetch(`${API_BASE}/trades/buy`, {
+          method: "POST",
+          credentials: "include",
+          headers,
+          body: JSON.stringify({
+            email: userId,
+            eventId: event.id,
+            eventSlug: event.slug || "",
+            eventTitle: event.title,
+            marketId: activeOutcome.id,
+            marketName: activeOutcome.name,
+            tokenId: activeTokenId || `${activeOutcome.id}:${selectedSide}`,
+            side: selectedSide,
+            amountUsd: numAmount,
+            price: activePrice,
+          }),
+        });
+        const json = (await res.json()) as {
+          success?: boolean;
+          message?: string;
+          data?: { trade: TradePosition; cash: number };
         };
 
-        setIsSpinning(false);
-        setNow(Date.now());
-        setJustWonDay(spunDay);
-        setDbUser(updatedDbUser);
+        if (!res.ok || !json.success || !json.data) {
+          setOrderNotice(json.message || "Buy order failed.");
+          return;
+        }
 
-        window.dispatchEvent(
-          new CustomEvent("promarkets-user-updated", { detail: updatedDbUser }),
+        const { trade, cash: updatedCash } = json.data;
+        setCash(updatedCash);
+        syncLocalCash(updatedCash);
+        setPositions((prev) => {
+          const exists = prev.some((p) => p._id === trade._id);
+          return exists
+            ? prev.map((p) => (p._id === trade._id ? trade : p))
+            : [trade, ...prev];
+        });
+        setAmount("");
+        const sharesBought = numAmount / activePrice;
+        setOrderNotice(
+          `Bought ${sharesBought.toFixed(2)} ${selectedSide} shares @ ${formatCents(
+            activePrice,
+          )} (Wins $${sharesBought.toFixed(2)} if ${selectedSide} wins)`,
         );
-        await onClaimBonus?.(ALWAYS_WIN_AMOUNT, spunDay);
       } catch {
-        setIsSpinning(false);
-        setSpinError("Network error while claiming your spin bonus.");
+        setOrderNotice("Network error while placing buy order.");
+      } finally {
+        setIsSubmitting(false);
       }
-    }, SPIN_DURATION_MS + 120);
+    } else {
+      if (!currentPos || currentPos.shares <= 0) {
+        setOrderNotice(`You do not own any ${selectedSide} shares to sell.`);
+        return;
+      }
+      const maxUsd = currentPos.shares * activePrice;
+      if (numAmount > maxUsd + 0.01) {
+        setOrderNotice(`Max sellable value is $${maxUsd.toFixed(2)}.`);
+        return;
+      }
+      setIsSubmitting(true);
+      try {
+        const headers = await buildAuthHeaders();
+        const res = await fetch(`${API_BASE}/trades/sell`, {
+          method: "POST",
+          credentials: "include",
+          headers,
+          body: JSON.stringify({
+            email: userId,
+            marketId: activeOutcome.id,
+            side: selectedSide,
+            amountUsd: numAmount,
+            price: activePrice,
+          }),
+        });
+        const json = (await res.json()) as {
+          success?: boolean;
+          message?: string;
+          data?: { trade: TradePosition; proceeds: number; cash: number };
+        };
+
+        if (!res.ok || !json.success || !json.data) {
+          setOrderNotice(json.message || "Sell order failed.");
+          return;
+        }
+
+        const { trade, proceeds, cash: updatedCash } = json.data;
+        setCash(updatedCash);
+        syncLocalCash(updatedCash);
+        setPositions((prev) =>
+          trade.status !== "OPEN" || trade.shares <= 0.0001
+            ? prev.filter((p) => p._id !== trade._id)
+            : prev.map((p) => (p._id === trade._id ? trade : p)),
+        );
+        setAmount("");
+        setOrderNotice(
+          `Sold ${selectedSide} shares for +$${proceeds.toFixed(2)}`,
+        );
+      } catch {
+        setOrderNotice("Network error while placing sell order.");
+      } finally {
+        setIsSubmitting(false);
+      }
+    }
   };
 
-  const sortedTiers = [3, 5, 15, 50, 100, 500, 1500, 2500];
-  const cx = 180;
-  const cy = 180;
-  const radius = 152;
-  const ledCount = 24;
+  const modalPosition = modalTradeId
+    ? (positions.find((p) => p._id === modalTradeId) ?? null)
+    : null;
+  const modalLivePrice = modalPosition
+    ? getPositionLivePrice(modalPosition)
+    : 0;
+  const modalValue = modalPosition ? modalPosition.shares * modalLivePrice : 0;
+  const modalPnl = modalPosition ? modalValue - modalPosition.cost : 0;
+
+  const highlightedOutcomeId = activeOutcome?.id || topChartOutcomes[0]?.id;
+
+  const breadcrumb =
+    (event.tags || [])
+      .slice(0, 2)
+      .map((t) => t.label)
+      .join(" · ") || "Markets";
 
   return (
-    <div className="min-h-screen bg-[#0d1016] text-white py-8 px-4 md:px-6">
-      <div className="max-w-[1160px] mx-auto space-y-6">
-        {/* Page Header */}
-        <div className="flex items-start gap-3.5 border-b border-white/[0.07] pb-5">
-          <div className="w-11 h-11 rounded-xl bg-[#161a22] border border-white/[0.08] flex items-center justify-center shrink-0">
-            <CircleDollarSign className="w-5 h-5 text-emerald-400" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              Rewards
-            </h1>
-            <p className="text-sm text-gray-400 mt-0.5">
-              Unlock your 5-Day First Deposit Bonus spin streak and earn daily
-              USDC liquidity rewards.
-            </p>
+    <div className="min-h-screen bg-[#0d1016] text-white font-sans antialiased py-5 px-4 md:px-6">
+      <div className="max-w-[1260px] mx-auto">
+        {/* Top Bar: Back + Live Stream Indicator */}
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-2 text-xs font-semibold text-gray-400 hover:text-white transition-colors"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              className="w-3.5 h-3.5 stroke-current fill-none"
+              strokeWidth="2"
+            >
+              <path
+                d="M10 3L5 8l5 5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Back to Markets
+          </button>
+
+          <div className="flex items-center gap-2 text-[11px] font-semibold">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                wsConnected ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
+              }`}
+            />
+            <span className="text-gray-400">
+              {wsConnected ? "Live Orderbook Feed" : "Connecting Live Feed..."}
+            </span>
           </div>
         </div>
 
-        {/* ================= FIRST DEPOSIT BONUS HERO CARD ================= */}
-        <div className="relative overflow-hidden rounded-3xl border border-amber-500/30 bg-gradient-to-br from-[#1b1912] via-[#151822] to-[#101819] p-6 md:p-8 shadow-2xl">
-          <div
-            className="pointer-events-none absolute -top-28 -right-20 w-96 h-96 rounded-full opacity-25 blur-3xl"
-            style={{
-              background:
-                "radial-gradient(circle, #fbbf24 0%, #10b981 50%, transparent 75%)",
-            }}
-          />
-
-          <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-            <div className="lg:col-span-8 space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-extrabold uppercase tracking-wider">
-                  <Gift className="w-3.5 h-3.5" />
-                  First Deposit Bonus
-                </div>
-                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-xs font-bold uppercase tracking-wider">
-                  <Calendar className="w-3.5 h-3.5" />5 Daily Spins
+        {/* Main 2-Column Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-7 items-start">
+          {/* ================= LEFT COLUMN (Header + Chart + Rows) ================= */}
+          <div className="lg:col-span-8">
+            {/* Title Header */}
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div className="flex items-center gap-3.5 min-w-0">
+                {(event.icon || event.image) && (
+                  <img
+                    src={event.icon || event.image}
+                    alt={event.title}
+                    className="w-12 h-12 rounded-xl object-cover bg-white/10 shrink-0"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-gray-400 mb-0.5">
+                    {breadcrumb}
+                  </p>
+                  <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight truncate">
+                    {event.title}
+                  </h1>
                 </div>
               </div>
 
-              <div>
-                <h2 className="text-3xl md:text-4xl font-black tracking-tight text-white flex flex-wrap items-center gap-2.5">
-                  <span>Win up to</span>
-                  <span className="bg-gradient-to-r from-amber-300 via-yellow-400 to-emerald-300 bg-clip-text text-transparent inline-flex items-center gap-1.5">
-                    $2,500 in BTC
-                    <Bitcoin className="w-8 h-8 text-amber-400 shrink-0" />
-                  </span>
-                </h2>
-                <p className="text-sm text-gray-300/90 mt-2 max-w-xl">
-                  Deposit your first amount to unlock a 5-day bonus spin
-                  calendar. Spin once every 24 hours for instant Bitcoin
-                  rewards.
-                </p>
+              {/* Action Icons */}
+              <div className="flex items-center gap-2 text-gray-400 shrink-0 pt-1">
+                <button
+                  type="button"
+                  title="Embed"
+                  className="p-2 rounded-lg hover:bg-white/[0.06] hover:text-white transition-colors"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="w-4 h-4 stroke-current fill-none"
+                    strokeWidth="1.8"
+                  >
+                    <path
+                      d="M8 7l-5 5 5 5M16 7l5 5-5 5M13 4l-2 16"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(window.location.href);
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  }}
+                  title="Copy link"
+                  className="p-2 rounded-lg hover:bg-white/[0.06] hover:text-white transition-colors relative"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="w-4 h-4 stroke-current fill-none"
+                    strokeWidth="1.8"
+                  >
+                    <path
+                      d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  {copied && (
+                    <span className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] bg-white text-black px-1.5 py-0.5 rounded font-semibold">
+                      Copied
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBookmarked((b) => !b)}
+                  title="Bookmark"
+                  className="p-2 rounded-lg hover:bg-white/[0.06] hover:text-white transition-colors"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    className={`w-4 h-4 ${
+                      bookmarked
+                        ? "fill-white stroke-white"
+                        : "fill-none stroke-current"
+                    }`}
+                    strokeWidth="1.8"
+                  >
+                    <path
+                      d="M6 4h12a1 1 0 0 1 1 1v15l-7-4-7 4V5a1 1 0 0 1 1-1z"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
               </div>
+            </div>
 
-              {/* Prize Pills */}
-              <div className="flex flex-wrap gap-2">
-                {sortedTiers.map((amt) => {
-                  const isJackpot = amt === 2500;
-                  const isWon =
-                    isLoggedIn && spins.some((s) => s.amount === amt);
+            {/* Legend + Polymarket Watermark */}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                {topChartOutcomes.map((o) => {
+                  const livePct = Math.round(
+                    getLiveOutcomeProb(o, "yes") * 100,
+                  );
+                  const isFocused = highlightedOutcomeId === o.id;
                   return (
-                    <span
-                      key={amt}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold tabular-nums border ${
-                        isWon
-                          ? "bg-emerald-500/20 border-emerald-400 text-emerald-300 shadow-sm shadow-emerald-500/20"
-                          : isJackpot
-                            ? "bg-amber-500/15 border-amber-400/40 text-amber-300"
-                            : "bg-[#0d1016]/80 border-white/[0.08] text-gray-200"
+                    <button
+                      key={o.id}
+                      type="button"
+                      onClick={() => setSelectedOutcomeId(o.id)}
+                      className={`flex items-center gap-1.5 text-xs transition-opacity ${
+                        isFocused
+                          ? "opacity-100"
+                          : "opacity-65 hover:opacity-100"
                       }`}
                     >
-                      ${amt.toLocaleString()}
-                    </span>
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: o.color }}
+                      />
+                      <span className="text-gray-300 font-medium">
+                        {o.name}
+                      </span>
+                      <span className="text-white font-bold tabular-nums">
+                        {livePct}%
+                      </span>
+                    </button>
                   );
                 })}
               </div>
 
-              {/* Action Buttons */}
-              <div className="pt-2 flex flex-wrap items-center gap-3">
-                {!isLoggedIn ? (
-                  <button
-                    type="button"
-                    onClick={handleSignupRedirect}
-                    className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-emerald-400 hover:brightness-110 text-black font-black text-sm shadow-xl shadow-amber-500/25 transition-all cursor-pointer"
-                  >
-                    <UserPlus className="w-4 h-4" />
-                    Sign Up, Deposit &amp; Get Up to $2,500
-                  </button>
-                ) : isLoadingDb && !dbUser ? (
-                  <div className="px-5 py-3 rounded-xl bg-white/[0.06] border border-white/[0.1] text-xs text-gray-300 font-semibold">
-                    Loading rewards from database...
-                  </div>
-                ) : !hasFirstDeposit ? (
-                  <button
-                    type="button"
-                    onClick={handleDepositUnlock}
-                    className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-black font-extrabold text-sm shadow-lg shadow-amber-500/25 transition-all cursor-pointer"
-                  >
-                    <Lock className="w-4 h-4" />
-                    Deposit First Amount to Unlock Spin
-                  </button>
-                ) : isAllCompleted ? (
-                  <div className="inline-flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-500/15 border border-emerald-400/35">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
-                    <div>
-                      <p className="text-sm font-bold text-white">
-                        5-Day Bonus Completed: ${totalWonUsd.toLocaleString()}{" "}
-                        in BTC!
-                      </p>
-                      <p className="text-xs text-emerald-300">
-                        All 5 daily spins claimed &amp; credited.
-                      </p>
-                    </div>
-                  </div>
-                ) : remainingMs > 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(true)}
-                    className="inline-flex items-center gap-2.5 px-5 py-3 rounded-xl bg-[#111622] border border-amber-400/30 text-amber-300 font-bold text-sm cursor-pointer hover:border-amber-400/60 transition-colors"
-                  >
-                    <Clock className="w-4 h-4" />
-                    <span className="tabular-nums">
-                      Day {currentDay} Unlocks in {formatCountdown(remainingMs)}
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJustWonDay(null);
-                      setSpinError(null);
-                      setIsModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-emerald-400 hover:brightness-110 text-black font-black text-sm shadow-xl shadow-amber-500/25 transition-all cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Open Spin Wheel (Day {currentDay} of {MAX_SPIN_DAYS})
-                  </button>
-                )}
-
-                {hasFirstDeposit && (
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(true)}
-                    className="px-4 py-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.08] text-xs font-semibold text-gray-200 transition-colors cursor-pointer"
-                  >
-                    Open Spin Wheel
-                  </button>
-                )}
-              </div>
-
-              {spinError && (
-                <p className="text-xs text-red-400 font-medium pt-1">
-                  {spinError}
-                </p>
-              )}
-            </div>
-
-            {/* Right Mini Wheel Preview */}
-            <div className="lg:col-span-4 flex justify-center">
-              <button
-                type="button"
-                onClick={() => {
-                  if (hasFirstDeposit) {
-                    setIsModalOpen(true);
-                  } else {
-                    handleDepositUnlock();
-                  }
-                }}
-                className="group relative w-48 h-48 rounded-full flex items-center justify-center cursor-pointer transition-transform hover:scale-105"
-                aria-label="Open First Deposit Spin Wheel"
-              >
-                <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-amber-500/30 to-emerald-500/30 blur-xl group-hover:opacity-100 opacity-75 transition-opacity" />
+              <div className="flex items-center gap-1.5 text-gray-500 text-sm font-semibold select-none">
                 <svg
-                  viewBox="0 0 360 360"
-                  className="w-full h-full relative z-10"
+                  viewBox="0 0 24 24"
+                  className="w-4 h-4 stroke-current fill-none"
+                  strokeWidth="1.8"
                 >
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r={radius + 10}
-                    fill="#0b0e14"
-                    stroke="#fbbf24"
-                    strokeWidth="6"
-                  />
-                  {SPIN_SEGMENTS.map((seg, i) => (
-                    <path
-                      key={seg.amount}
-                      d={buildSlicePath(
-                        cx,
-                        cy,
-                        radius,
-                        i * SLICE_DEG,
-                        (i + 1) * SLICE_DEG,
-                      )}
-                      fill={seg.gradStart}
-                      stroke="rgba(255,255,255,0.18)"
-                      strokeWidth="2"
-                    />
-                  ))}
-                  <circle
-                    cx={cx}
-                    cy={cy}
-                    r="42"
-                    fill="#0b0e14"
-                    stroke="#fbbf24"
-                    strokeWidth="5"
-                  />
-                  <text
-                    x={cx}
-                    y={cy + 2}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill="#fbbf24"
-                    fontSize="18"
-                    fontWeight="900"
-                  >
-                    SPIN
-                  </text>
+                  <path d="M5 4v16l7-4V8L5 4zm7 4l7-4v16l-7-4V8z" />
                 </svg>
-                {!hasFirstDeposit && (
-                  <div className="absolute inset-0 z-20 rounded-full bg-black/45 backdrop-blur-[1px] flex items-center justify-center">
-                    <div className="w-11 h-11 rounded-full bg-amber-500/25 border border-amber-400/50 flex items-center justify-center">
-                      <Lock className="w-5 h-5 text-amber-300" />
+                Polymarket
+              </div>
+            </div>
+
+            {/* Interactive Dynamic Multi-Line Chart */}
+            <div className="relative select-none">
+              <div className="flex items-stretch">
+                <div
+                  className="flex-1 relative cursor-crosshair"
+                  onMouseMove={handleMouseMove}
+                  onMouseLeave={() => setHoverIdx(null)}
+                >
+                  <svg
+                    viewBox={`0 0 ${chartW} ${chartH}`}
+                    className="w-full h-[250px] overflow-visible"
+                    preserveAspectRatio="none"
+                  >
+                    <defs>
+                      {topChartOutcomes.map((o) => (
+                        <linearGradient
+                          key={`area-${o.id}`}
+                          id={`areaGrad-${o.id}`}
+                          x1="0"
+                          y1="0"
+                          x2="0"
+                          y2="1"
+                        >
+                          <stop
+                            offset="0%"
+                            stopColor={o.color}
+                            stopOpacity="0.24"
+                          />
+                          <stop
+                            offset="100%"
+                            stopColor={o.color}
+                            stopOpacity="0"
+                          />
+                        </linearGradient>
+                      ))}
+                    </defs>
+
+                    {/* Horizontal Dotted Grid */}
+                    {ticksY.map((val) => {
+                      const y = toChartY(val / 100);
+                      return (
+                        <line
+                          key={val}
+                          x1="0"
+                          y1={y}
+                          x2={chartW}
+                          y2={y}
+                          stroke="rgba(255,255,255,0.09)"
+                          strokeWidth="1"
+                          strokeDasharray="2 4"
+                        />
+                      );
+                    })}
+
+                    {/* Outcome Lines */}
+                    {topChartOutcomes.map((o) => {
+                      const s = seriesMap[o.id] || [];
+                      if (s.length < 2) return null;
+
+                      const isFocused = highlightedOutcomeId === o.id;
+                      const coords = s.map((pt, i) => ({
+                        x: (i / (s.length - 1)) * chartW,
+                        y: toChartY(pt.p),
+                      }));
+
+                      const linePath = coords
+                        .map(
+                          (pt, i) =>
+                            `${i === 0 ? "M" : "L"} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`,
+                        )
+                        .join(" ");
+
+                      const areaPath = `${linePath} L ${chartW} ${chartH} L 0 ${chartH} Z`;
+                      const lastPt = coords[coords.length - 1];
+
+                      return (
+                        <g
+                          key={o.id}
+                          style={{
+                            opacity: isFocused ? 1 : 0.6,
+                            transition: "opacity 200ms ease",
+                          }}
+                        >
+                          {isFocused && (
+                            <path
+                              d={areaPath}
+                              fill={`url(#areaGrad-${o.id})`}
+                            />
+                          )}
+                          <path
+                            d={linePath}
+                            fill="none"
+                            stroke={o.color}
+                            strokeWidth={isFocused ? "2.4" : "1.6"}
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
+                          />
+                          {wsConnected && isFocused && (
+                            <circle
+                              cx={lastPt.x}
+                              cy={lastPt.y}
+                              r="7"
+                              fill={o.color}
+                              opacity="0.35"
+                              className="animate-ping"
+                              style={{
+                                transformOrigin: `${lastPt.x}px ${lastPt.y}px`,
+                              }}
+                            />
+                          )}
+                          <circle
+                            cx={lastPt.x}
+                            cy={lastPt.y}
+                            r={isFocused ? "4" : "3"}
+                            fill={o.color}
+                            stroke="#0d1016"
+                            strokeWidth="1.5"
+                          />
+                        </g>
+                      );
+                    })}
+
+                    {/* Hover Crosshair & Dots */}
+                    {hoverIdx !== null && baseTimeline[hoverIdx] && (
+                      <g>
+                        <line
+                          x1={
+                            (hoverIdx / Math.max(1, baseTimeline.length - 1)) *
+                            chartW
+                          }
+                          y1="0"
+                          x2={
+                            (hoverIdx / Math.max(1, baseTimeline.length - 1)) *
+                            chartW
+                          }
+                          y2={chartH}
+                          stroke="rgba(255,255,255,0.28)"
+                          strokeWidth="1"
+                        />
+                        {topChartOutcomes.map((o) => {
+                          const s = seriesMap[o.id] || [];
+                          const pt = s[Math.min(hoverIdx, s.length - 1)];
+                          if (!pt) return null;
+                          const cx =
+                            (hoverIdx / Math.max(1, baseTimeline.length - 1)) *
+                            chartW;
+                          const cy = toChartY(pt.p);
+                          return (
+                            <circle
+                              key={`dot-${o.id}`}
+                              cx={cx}
+                              cy={cy}
+                              r="4.2"
+                              fill={o.color}
+                              stroke="#0d1016"
+                              strokeWidth="1.5"
+                            />
+                          );
+                        })}
+                      </g>
+                    )}
+                  </svg>
+
+                  {/* Hover Time + Floating Outcome Tooltip Pills */}
+                  {hoverIdx !== null && baseTimeline[hoverIdx] && (
+                    <div
+                      className="absolute top-0 pointer-events-none z-20"
+                      style={{
+                        left: `${Math.min(
+                          72,
+                          Math.max(
+                            4,
+                            (hoverIdx / Math.max(1, baseTimeline.length - 1)) *
+                              100,
+                          ),
+                        )}%`,
+                      }}
+                    >
+                      <div className="text-[11px] font-medium text-gray-300 bg-[#0d1016]/90 px-2 py-0.5 rounded mb-2 whitespace-nowrap">
+                        {formatTooltipTime(baseTimeline[hoverIdx].t)}
+                      </div>
+                      <div className="space-y-1">
+                        {topChartOutcomes.map((o) => {
+                          const s = seriesMap[o.id] || [];
+                          const pt = s[Math.min(hoverIdx, s.length - 1)];
+                          if (!pt) return null;
+                          return (
+                            <div
+                              key={`tip-${o.id}`}
+                              className="flex items-center gap-1.5 bg-[#1b2028]/95 border border-white/10 rounded px-2 py-0.5 text-[11px] font-bold text-white shadow whitespace-nowrap"
+                            >
+                              <span
+                                className="w-1 h-3 rounded-full"
+                                style={{ backgroundColor: o.color }}
+                              />
+                              <span>{o.name}</span>
+                              <span className="tabular-nums">
+                                {(pt.p * 100).toFixed(1)}%
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
+                  )}
+
+                  <div className="absolute bottom-2 left-0 bg-[#1a1f28]/90 text-[10px] text-gray-400 px-2 py-0.5 rounded">
+                    Source: Polymarket.com
                   </div>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ================= 5-DAY SPIN CALENDAR (ONLY WHEN hasFirstDeposit === true) ================= */}
-        {isLoggedIn && hasFirstDeposit && (
-          <div className="bg-[#161a22] border border-white/[0.08] rounded-2xl p-5 md:p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-400/30 flex items-center justify-center">
-                  <Calendar className="w-4 h-4 text-amber-300" />
                 </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    5-Day Spin Calendar
-                  </h3>
-                  <p className="text-xs text-gray-400">
-                    {isAllCompleted
-                      ? "All 5 daily bonus spins claimed!"
-                      : remainingMs > 0
-                        ? `Next spin unlocks in ${formatCountdown(remainingMs)} (24h cooldown)`
-                        : `Day ${currentDay} spin is unlocked and ready now!`}
-                  </p>
+
+                {/* Dynamic Right Y-Axis */}
+                <div className="flex flex-col justify-between pl-3 h-[250px] text-[11px] text-gray-400 tabular-nums">
+                  {ticksY.map((val) => (
+                    <span key={val} className="leading-none">
+                      {val}%
+                    </span>
+                  ))}
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-xs font-bold tabular-nums">
-                  {completedCount} / {MAX_SPIN_DAYS} Days Claimed
-                </span>
-                <span className="px-3 py-1 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-bold tabular-nums">
-                  Total: ${totalWonUsd} BTC
-                </span>
+              <div className="flex items-center justify-between pr-12 mt-2 text-[11px] text-gray-400">
+                {xTicks.map((t, i) => (
+                  <span key={i}>{t.label}</span>
+                ))}
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              {Array.from({ length: MAX_SPIN_DAYS }).map((_, idx) => {
-                const dayNum = idx + 1;
-                const record = spins[idx];
-                const isClaimed = Boolean(record);
-                const isNextDay =
-                  !isAllCompleted && dayNum === completedCount + 1;
-                const isReadyNow = isNextDay && remainingMs === 0;
-                const isWaiting24h = isNextDay && remainingMs > 0;
+            {/* Volume / End Date & Timeframes Row */}
+            <div className="flex flex-wrap items-center justify-between gap-3 py-4 mt-3 border-b border-white/[0.08]">
+              <div className="flex items-center gap-4 text-xs text-gray-400 tabular-nums">
+                <span className="flex items-center gap-1.5 font-medium text-gray-300">
+                  <svg viewBox="0 0 20 20" className="w-4 h-4 fill-gray-400">
+                    <path d="M5 4h10v2a5 5 0 0 1-10 0V4zm-2 1h1v2H3a1 1 0 0 1 0-2zm13 0h1a1 1 0 0 1 0 2h-1V5zM9 12h2v3h3v2H6v-2h3v-3z" />
+                  </svg>
+                  {formatDollarVol(event.volume || event.volume24hr)}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <svg
+                    viewBox="0 0 20 20"
+                    className="w-3.5 h-3.5 stroke-gray-400 fill-none"
+                    strokeWidth="1.8"
+                  >
+                    <circle cx="10" cy="10" r="7" />
+                    <path d="M10 6v4l3 2" strokeLinecap="round" />
+                  </svg>
+                  {formatDateShort(event.endDate)}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {TIMEFRAMES.map((tf) => (
+                  <button
+                    key={tf.label}
+                    type="button"
+                    onClick={() => setTimeframe(tf.label)}
+                    className={`px-2 py-1 rounded text-xs font-semibold transition-colors ${
+                      timeframe === tf.label
+                        ? "bg-white/[0.12] text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {tf.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Candidate / Outcome Rows */}
+            <div className="divide-y divide-white/[0.07]">
+              {outcomesList.map((o) => {
+                const isRowSelected = activeOutcome?.id === o.id;
+                const liveYes = getLiveOutcomeProb(o, "yes");
+                const liveNo = getLiveOutcomeProb(o, "no");
+                const livePct = Math.round(liveYes * 100);
+                const rowResolved =
+                  (o.yesTokenId && resolvedMap[o.yesTokenId] !== undefined) ||
+                  (o.noTokenId && resolvedMap[o.noTokenId] !== undefined) ||
+                  o.closed;
 
                 return (
                   <div
-                    key={dayNum}
-                    className={`relative rounded-2xl p-4 border transition-all flex flex-col justify-between min-h-[126px] ${
-                      isClaimed
-                        ? "bg-emerald-500/10 border-emerald-400/35"
-                        : isReadyNow
-                          ? "bg-amber-500/15 border-amber-400/60 shadow-lg shadow-amber-500/10"
-                          : isWaiting24h
-                            ? "bg-[#111622] border-amber-400/25"
-                            : "bg-[#0e1118] border-white/[0.06] opacity-70"
+                    key={o.id}
+                    onClick={() => setSelectedOutcomeId(o.id)}
+                    className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-4 py-3.5 px-2 -mx-2 rounded-xl cursor-pointer transition-colors ${
+                      isRowSelected
+                        ? "bg-white/[0.04]"
+                        : "hover:bg-white/[0.02]"
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-extrabold uppercase tracking-wider text-gray-300">
-                        Day {dayNum}
-                      </span>
-                      {isClaimed ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                      ) : isReadyNow ? (
-                        <Sparkles className="w-4 h-4 text-amber-400" />
-                      ) : isWaiting24h ? (
-                        <Clock className="w-4 h-4 text-amber-300 animate-pulse" />
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {o.image ? (
+                        <img
+                          src={o.image}
+                          alt={o.name}
+                          className="w-10 h-10 rounded-lg object-cover bg-white/10 shrink-0"
+                        />
                       ) : (
-                        <Lock className="w-3.5 h-3.5 text-gray-500" />
+                        <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-xs font-bold shrink-0">
+                          {o.name.slice(0, 2).toUpperCase()}
+                        </div>
                       )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-[15px] font-bold text-white truncate">
+                            {o.name}
+                          </p>
+                          {rowResolved && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                              Resolved
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-400 tabular-nums">
+                          {formatDollarVol(o.volume)}
+                        </p>
+                      </div>
                     </div>
 
-                    <div className="mt-3">
-                      {isClaimed ? (
-                        <>
-                          <p className="text-lg font-black text-emerald-300 tabular-nums">
-                            +${record.amount} BTC
-                          </p>
-                          <p className="text-[11px] text-emerald-400/80 font-medium mt-0.5">
-                            Claimed
-                          </p>
-                        </>
-                      ) : isReadyNow ? (
-                        <>
-                          <p className="text-sm font-black text-amber-300">
-                            Ready to Spin!
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setJustWonDay(null);
-                              setSpinError(null);
-                              setIsModalOpen(true);
-                            }}
-                            className="mt-1.5 w-full py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black text-xs font-extrabold cursor-pointer transition-colors"
-                          >
-                            Spin Now
-                          </button>
-                        </>
-                      ) : isWaiting24h ? (
-                        <>
-                          <p className="text-sm font-bold text-amber-300 tabular-nums">
-                            {formatCountdown(remainingMs)}
-                          </p>
-                          <p className="text-[11px] text-gray-400 mt-0.5">
-                            Unlocks in 24h
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-sm font-bold text-gray-400">
-                            Up to $2,500
-                          </p>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            Locked
-                          </p>
-                        </>
-                      )}
+                    <div className="flex items-baseline gap-2 tabular-nums shrink-0">
+                      <span className="text-xl font-bold text-white">
+                        {livePct}%
+                      </span>
+                      <span
+                        className={`text-xs font-semibold ${
+                          o.delta >= 0 ? "text-emerald-400" : "text-red-400"
+                        }`}
+                      >
+                        {o.delta >= 0
+                          ? `▲ ${o.delta}%`
+                          : `▼ ${Math.abs(o.delta)}%`}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedOutcomeId(o.id);
+                          setSelectedSide(o.yesLabel);
+                        }}
+                        className={`flex-1 sm:flex-none min-w-[116px] py-2.5 px-3 rounded-lg text-xs font-bold transition-all tabular-nums ${
+                          isRowSelected && selectedSide === o.yesLabel
+                            ? "bg-[#16a34a] text-white ring-1 ring-emerald-300"
+                            : "bg-[#14532d]/70 hover:bg-[#15803d] text-[#4ade80] hover:text-white"
+                        }`}
+                      >
+                        Buy {o.yesLabel} {formatCents(liveYes)}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedOutcomeId(o.id);
+                          setSelectedSide(o.noLabel);
+                        }}
+                        className={`flex-1 sm:flex-none min-w-[116px] py-2.5 px-3 rounded-lg text-xs font-bold transition-all tabular-nums ${
+                          isRowSelected && selectedSide === o.noLabel
+                            ? "bg-[#dc2626] text-white ring-1 ring-red-300"
+                            : "bg-[#7f1d1d]/50 hover:bg-[#991b1b] text-[#fca5a5] hover:text-white"
+                        }`}
+                      >
+                        Buy {o.noLabel} {formatCents(liveNo)}
+                      </button>
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
-        )}
 
-        {/* ================= REWARDS SUMMARY STATS ================= */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[
-            {
-              label: "Your 5-Day Bonus Earned",
-              value: totalWonUsd > 0 ? `$${totalWonUsd} BTC` : "Up to $2,500",
-              sub: !isLoggedIn
-                ? "Sign up & deposit to unlock"
-                : !hasFirstDeposit
-                  ? "Deposit to unlock Day 1 spin"
-                  : isAllCompleted
-                    ? "5/5 daily spins completed"
-                    : remainingMs > 0
-                      ? `Next spin in ${formatCountdown(remainingMs)}`
-                      : `Day ${currentDay} of ${MAX_SPIN_DAYS} spin ready`,
-            },
-            {
-              label: "Total Rewards Pool",
-              value: "$125,000 / wk",
-              sub: "Across eligible markets",
-            },
-            {
-              label: "Your Liquidity Score",
-              value: "0 pts",
-              sub: "Place orders near midpoint",
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="bg-[#161a22] border border-white/[0.07] rounded-2xl p-5"
-            >
-              <p className="text-xs text-gray-400 font-medium">{stat.label}</p>
-              <p className="text-2xl font-bold text-white mt-1 tabular-nums">
-                {stat.value}
-              </p>
-              <p className="text-xs text-emerald-400 mt-1 tabular-nums">
-                {stat.sub}
-              </p>
-            </div>
-          ))}
-        </div>
+          {/* ================= RIGHT COLUMN (Trade Box + Positions + Related) ================= */}
+          <div className="lg:col-span-4 space-y-4">
+            {/* Order Ticket Card */}
+            <div className="bg-[#161a21] border border-white/[0.08] rounded-2xl p-4 shadow-xl">
+              {/* Selected Outcome Header */}
+              <div className="flex items-center justify-between gap-3 pb-4">
+                <div className="flex items-center gap-3 min-w-0">
+                  {(activeOutcome?.image || event.icon) && (
+                    <img
+                      src={activeOutcome?.image || event.icon}
+                      alt={activeOutcome?.name}
+                      className="w-10 h-10 rounded-lg object-cover bg-white/10 shrink-0"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-xs text-gray-400 truncate">
+                      {event.title}
+                    </p>
+                    <p className="text-sm font-bold text-white truncate">
+                      {activeOutcome?.name}{" "}
+                      <span className="text-gray-400 mx-0.5">·</span>
+                      <span
+                        className={
+                          isYesSelected ? "text-[#22c55e]" : "text-[#ef4444]"
+                        }
+                      >
+                        {selectedSide}
+                      </span>
+                    </p>
+                  </div>
+                </div>
 
-        {/* ================= SPIN WHEEL MODAL (ONLY WHEN hasFirstDeposit === true) ================= */}
-        {isModalOpen && hasFirstDeposit && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
-            onClick={() => !isSpinning && setIsModalOpen(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-[490px] rounded-3xl p-[1.5px] bg-gradient-to-b from-amber-400/60 via-emerald-400/30 to-white/10 shadow-[0_0_80px_rgba(245,158,11,0.22)]"
-            >
-              <div className="relative rounded-[23px] bg-[#0e121a] p-6 md:p-7 overflow-hidden">
-                <div
-                  className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-80 h-48 rounded-full opacity-30 blur-3xl"
-                  style={{
-                    background:
-                      "radial-gradient(circle, #fbbf24 0%, #10b981 60%, transparent 80%)",
-                  }}
-                />
+                {resolutionStatus && (
+                  <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[11px] font-bold shrink-0">
+                    Won: {resolutionStatus}
+                  </span>
+                )}
+              </div>
 
+              {/* Buy / Sell Tabs */}
+              <div className="flex items-center justify-between border-b border-white/[0.08] mb-4">
+                <div className="flex items-center gap-5">
+                  {(["Buy", "Sell"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => {
+                        setTradeTab(tab);
+                        setOrderNotice("");
+                      }}
+                      className={`pb-2.5 text-sm font-bold border-b-2 transition-colors ${
+                        tradeTab === tab
+                          ? "border-white text-white"
+                          : "border-transparent text-gray-400 hover:text-gray-200"
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+                <span className="text-xs font-semibold text-gray-300 pb-2">
+                  Market · Live
+                </span>
+              </div>
+
+              {/* Big Yes / No Toggle */}
+              <div className="grid grid-cols-2 gap-2.5 mb-5">
                 <button
                   type="button"
-                  disabled={isSpinning}
-                  onClick={() => setIsModalOpen(false)}
-                  className="absolute top-4 right-4 z-30 p-2 rounded-full bg-white/[0.07] hover:bg-white/[0.15] disabled:opacity-40 text-gray-300 transition-colors cursor-pointer"
-                  aria-label="Close spin wheel modal"
+                  onClick={() =>
+                    setSelectedSide(activeOutcome?.yesLabel || "Yes")
+                  }
+                  className={`py-3 rounded-xl text-sm font-bold transition-all tabular-nums ${
+                    isYesSelected
+                      ? "bg-[#16a34a] text-white"
+                      : "bg-[#222730] hover:bg-[#2a303c] text-gray-300"
+                  }`}
                 >
-                  <X className="w-4 h-4" />
+                  {activeOutcome?.yesLabel || "Yes"} {formatCents(liveYesPrice)}
                 </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedSide(activeOutcome?.noLabel || "No")
+                  }
+                  className={`py-3 rounded-xl text-sm font-bold transition-all tabular-nums ${
+                    !isYesSelected
+                      ? "bg-[#dc2626] text-white"
+                      : "bg-[#222730] hover:bg-[#2a303c] text-gray-300"
+                  }`}
+                >
+                  {activeOutcome?.noLabel || "No"} {formatCents(liveNoPrice)}
+                </button>
+              </div>
 
-                <div className="relative z-10 text-center space-y-1.5 mb-5">
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-[11px] font-extrabold uppercase tracking-wider">
-                    <Zap className="w-3.5 h-3.5" />
-                    Day {justWonDay ?? currentDay} of {MAX_SPIN_DAYS} · Bonus
-                    Wheel
-                  </div>
-                  <h3 className="text-2xl font-black text-white">
-                    Win up to{" "}
-                    <span className="text-amber-400">$2,500 in BTC</span>
-                  </h3>
-                  <p className="text-xs text-gray-400">
-                    $3 · $5 · $15 · $50 · $100 · $500 · $1,500 · $2,500
+              {/* Amount Input */}
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div>
+                  <p className="text-sm font-bold text-white">Amount</p>
+                  <p className="text-xs text-gray-400 tabular-nums">
+                    {loadingCash
+                      ? "Loading..."
+                      : `${formatCashString(cash)} cash`}
+                    {tradeTab === "Sell" && currentPos
+                      ? ` · $${currentPosValue.toFixed(2)} pos`
+                      : ""}
                   </p>
                 </div>
-
-                <div className="relative mx-auto w-[310px] h-[310px] sm:w-[340px] sm:h-[340px] flex items-center justify-center my-2">
-                  <div
-                    className={`absolute inset-2 rounded-full transition-opacity duration-500 blur-2xl ${
-                      isSpinning
-                        ? "bg-amber-400/35 opacity-100"
-                        : "bg-amber-500/15 opacity-80"
-                    }`}
-                  />
-
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 z-30 drop-shadow-[0_4px_12px_rgba(251,191,36,0.65)]">
-                    <svg width="36" height="38" viewBox="0 0 36 38">
-                      <defs>
-                        <linearGradient
-                          id="pointerGold"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop offset="0%" stopColor="#fef08a" />
-                          <stop offset="55%" stopColor="#f59e0b" />
-                          <stop offset="100%" stopColor="#b45309" />
-                        </linearGradient>
-                      </defs>
-                      <path
-                        d="M18 35 L4 6 Q18 11 32 6 Z"
-                        fill="url(#pointerGold)"
-                        stroke="#090b10"
-                        strokeWidth="2.5"
-                        strokeLinejoin="round"
-                      />
-                      <circle cx="18" cy="11" r="3" fill="#fffbeb" />
-                    </svg>
-                  </div>
-
-                  <svg
-                    viewBox="0 0 360 360"
-                    className="absolute inset-0 w-full h-full z-20 pointer-events-none"
-                  >
-                    <defs>
-                      <linearGradient id="rimMetal" x1="0" y1="0" x2="1" y2="1">
-                        <stop offset="0%" stopColor="#fde68a" />
-                        <stop offset="40%" stopColor="#d97706" />
-                        <stop offset="75%" stopColor="#78350f" />
-                        <stop offset="100%" stopColor="#fbbf24" />
-                      </linearGradient>
-                    </defs>
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={radius + 14}
-                      fill="none"
-                      stroke="url(#rimMetal)"
-                      strokeWidth="12"
-                    />
-                    {Array.from({ length: ledCount }).map((_, idx) => {
-                      const pos = polarToCartesian(
-                        cx,
-                        cy,
-                        radius + 14,
-                        (idx * 360) / ledCount,
-                      );
-                      const active =
-                        idx % 3 === ledTick % 3 ||
-                        (justWonDay !== null && idx % 2 === ledTick % 2);
-                      return (
-                        <circle
-                          key={idx}
-                          cx={pos.x}
-                          cy={pos.y}
-                          r={active ? 3.8 : 2.6}
-                          fill={
-                            active
-                              ? idx % 2 === 0
-                                ? "#fef08a"
-                                : "#34d399"
-                              : "#451a03"
-                          }
-                        />
-                      );
-                    })}
-                  </svg>
-
-                  <div
-                    className="relative z-10 w-full h-full rounded-full"
-                    style={{
-                      transform: `rotate(${rotation}deg)`,
-                      transition: isSpinning
-                        ? `transform ${SPIN_DURATION_MS}ms cubic-bezier(0.08, 0.88, 0.14, 1)`
-                        : "none",
+                <div className="flex items-center justify-end">
+                  <span className="text-3xl font-bold text-gray-400">$</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="0"
+                    value={amount}
+                    onChange={(e) => {
+                      setAmount(e.target.value);
+                      setOrderNotice("");
                     }}
+                    className="w-28 bg-transparent text-right text-3xl font-bold text-white placeholder-gray-500 outline-none tabular-nums"
+                  />
+                </div>
+              </div>
+
+              {/* Quick +$ Chips + Max */}
+              <div className="flex items-center justify-end gap-1.5 mb-5">
+                {[1, 5, 10, 100].map((val) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() =>
+                      setAmount((prev) => String((parseFloat(prev) || 0) + val))
+                    }
+                    className="px-2.5 py-1.5 rounded-lg bg-[#222730] hover:bg-[#2e3440] text-xs font-semibold text-gray-200 transition-colors"
                   >
-                    <svg viewBox="0 0 360 360" className="w-full h-full">
-                      <defs>
-                        {SPIN_SEGMENTS.map((seg, idx) => (
-                          <linearGradient
-                            key={seg.amount}
-                            id={`segGrad-${idx}`}
-                            x1="0"
-                            y1="0"
-                            x2="1"
-                            y2="1"
-                          >
-                            <stop offset="0%" stopColor={seg.gradStart} />
-                            <stop offset="100%" stopColor={seg.gradEnd} />
-                          </linearGradient>
-                        ))}
-                        <radialGradient
-                          id="glassSheen"
-                          cx="35%"
-                          cy="28%"
-                          r="70%"
-                        >
-                          <stop
-                            offset="0%"
-                            stopColor="rgba(255,255,255,0.22)"
-                          />
-                          <stop
-                            offset="55%"
-                            stopColor="rgba(255,255,255,0.03)"
-                          />
-                          <stop offset="100%" stopColor="rgba(0,0,0,0.25)" />
-                        </radialGradient>
-                        <radialGradient id="hubGold" cx="40%" cy="35%" r="65%">
-                          <stop offset="0%" stopColor="#fef08a" />
-                          <stop offset="50%" stopColor="#f59e0b" />
-                          <stop offset="100%" stopColor="#92400e" />
-                        </radialGradient>
-                      </defs>
+                    +${val}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const maxVal = tradeTab === "Buy" ? cash : currentPosValue;
+                    setAmount(maxVal > 0 ? maxVal.toFixed(2) : "0");
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg bg-[#222730] hover:bg-[#2e3440] text-xs font-semibold text-blue-300 transition-colors"
+                >
+                  Max
+                </button>
+              </div>
 
-                      {SPIN_SEGMENTS.map((seg, idx) => {
-                        const start = idx * SLICE_DEG;
-                        const end = start + SLICE_DEG;
-                        const mid = start + SLICE_DEG / 2;
-
-                        return (
-                          <g key={seg.amount}>
-                            <path
-                              d={buildSlicePath(cx, cy, radius, start, end)}
-                              fill={`url(#segGrad-${idx})`}
-                              stroke="rgba(255,255,255,0.22)"
-                              strokeWidth="1.8"
-                            />
-                            <g transform={`rotate(${mid} ${cx} ${cy})`}>
-                              <text
-                                x={cx}
-                                y={cy - radius * 0.69}
-                                fill={seg.textColor}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fontSize={seg.amount >= 1000 ? "15" : "18"}
-                                fontWeight="900"
-                              >
-                                {seg.label}
-                              </text>
-                              <text
-                                x={cx}
-                                y={cy - radius * 0.52}
-                                fill={seg.subColor}
-                                textAnchor="middle"
-                                dominantBaseline="middle"
-                                fontSize="9"
-                                fontWeight="800"
-                                letterSpacing="1"
-                              >
-                                BTC
-                              </text>
-                            </g>
-                          </g>
-                        );
-                      })}
-
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r={radius}
-                        fill="url(#glassSheen)"
-                        pointerEvents="none"
-                      />
-
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r="36"
-                        fill="#0b0e14"
-                        stroke="url(#hubGold)"
-                        strokeWidth="5"
-                      />
-                      <circle cx={cx} cy={cy} r="24" fill="url(#hubGold)" />
-                      <text
-                        x={cx}
-                        y={cy + 1}
-                        fill="#090b10"
-                        textAnchor="middle"
-                        dominantBaseline="middle"
-                        fontSize="13"
-                        fontWeight="900"
-                      >
-                        ₿
-                      </text>
-                    </svg>
-                  </div>
+              {/* Est Payout Row when amount > 0 */}
+              {numAmount > 0 && (
+                <div className="flex items-center justify-between text-xs text-gray-300 bg-white/[0.04] rounded-xl px-3 py-2.5 mb-3 tabular-nums">
+                  <span>
+                    {tradeTab === "Buy"
+                      ? "Est. shares / Payout if wins"
+                      : "Est. shares sold"}
+                  </span>
+                  <span className="font-bold text-emerald-400">
+                    {estShares.toFixed(2)} shares
+                    {tradeTab === "Buy" ? ` ($${estShares.toFixed(2)})` : ""}
+                  </span>
                 </div>
+              )}
 
-                <div className="relative z-20 mt-5 text-center space-y-3">
-                  {spinError && (
-                    <p className="text-xs text-red-400 font-medium">
-                      {spinError}
-                    </p>
-                  )}
+              {/* Primary CTA */}
+              <button
+                type="button"
+                disabled={isMarketResolved || loadingCash || isSubmitting}
+                onClick={() => void handleExecuteTrade()}
+                className={`w-full py-3 rounded-xl text-white text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  tradeTab === "Sell"
+                    ? "bg-amber-600 hover:bg-amber-500"
+                    : "bg-[#2563eb] hover:bg-[#1d4ed8]"
+                }`}
+              >
+                {isMarketResolved
+                  ? `Resolved (${resolutionStatus || "Closed"})`
+                  : !isLoggedIn
+                    ? "Log in to Trade"
+                    : loadingCash
+                      ? "Loading..."
+                      : isSubmitting
+                        ? "Processing..."
+                        : tradeTab === "Buy" && cash <= 0
+                          ? "Deposit Cash"
+                          : `${tradeTab} ${selectedSide}`}
+              </button>
 
-                  {justWonDay !== null ? (
-                    <div className="rounded-2xl bg-emerald-500/15 border border-emerald-400/40 p-4 space-y-1.5">
-                      <div className="inline-flex items-center gap-1.5 text-emerald-300 font-black text-base">
-                        <CheckCircle2 className="w-5 h-5" />
-                        Day {justWonDay}: You Won ${ALWAYS_WIN_AMOUNT} in BTC!
-                      </div>
-                      <p className="text-xs text-gray-300 tabular-nums">
-                        {isAllCompleted
-                          ? `All ${MAX_SPIN_DAYS} days completed! Total earned: $${totalWonUsd} BTC.`
-                          : `Come back in ${formatCountdown(remainingMs)} to spin Day ${currentDay}.`}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => setIsModalOpen(false)}
-                        className="mt-2 px-6 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs cursor-pointer"
-                      >
-                        View 5-Day Calendar
-                      </button>
-                    </div>
-                  ) : isAllCompleted ? (
-                    <div className="rounded-2xl bg-emerald-500/15 border border-emerald-400/40 p-4 space-y-1.5">
-                      <div className="inline-flex items-center gap-1.5 text-emerald-300 font-black text-base">
-                        <CheckCircle2 className="w-5 h-5" />
-                        All 5 Daily Spins Claimed!
-                      </div>
-                      <p className="text-xs text-gray-300">
-                        Total BTC Bonus Earned: ${totalWonUsd.toLocaleString()}
-                      </p>
-                    </div>
-                  ) : remainingMs > 0 ? (
-                    <div className="space-y-2">
-                      <button
-                        type="button"
-                        disabled
-                        className="w-full py-3.5 rounded-xl bg-white/[0.06] border border-white/[0.1] text-amber-300 font-extrabold text-sm flex items-center justify-center gap-2 tabular-nums opacity-85 cursor-not-allowed"
-                      >
-                        <Clock className="w-4 h-4" />
-                        Next Spin in {formatCountdown(remainingMs)}
-                      </button>
-                      <p className="text-[11px] text-gray-400">
-                        Day {currentDay} of {MAX_SPIN_DAYS} unlocks 24 hours
-                        after your last spin.
-                      </p>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={isSpinning}
-                      onClick={triggerSpin}
-                      className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-400 via-yellow-400 to-emerald-400 hover:brightness-110 disabled:opacity-60 text-black font-black text-sm flex items-center justify-center gap-2 shadow-xl shadow-amber-500/25 transition-all cursor-pointer"
+              {orderNotice && (
+                <p className="text-xs text-blue-300 text-center mt-2.5 leading-relaxed">
+                  {orderNotice}
+                </p>
+              )}
+            </div>
+
+            {/* Open Positions on this Event (Click to open Close modal) */}
+            {positions.length > 0 && (
+              <div className="bg-[#161a21] border border-white/[0.08] rounded-2xl p-4 space-y-2.5">
+                {positions.map((pos) => {
+                  const liveP = getPositionLivePrice(pos);
+                  const val = pos.shares * liveP;
+                  const pnl = val - pos.cost;
+                  return (
+                    <div
+                      key={pos._id}
+                      onClick={() => {
+                        setSelectedOutcomeId(pos.marketId);
+                        setSelectedSide(pos.side);
+                        setModalTradeId(pos._id);
+                      }}
+                      className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-transparent hover:border-white/[0.1] cursor-pointer tabular-nums transition-colors"
                     >
-                      <Sparkles className="w-4 h-4" />
-                      {isSpinning
-                        ? "Spinning..."
-                        : `SPIN DAY ${currentDay} & WIN BTC`}
+                      <div className="min-w-0 pr-2">
+                        <p className="font-bold text-white truncate">
+                          {pos.marketName} · {pos.side}
+                        </p>
+                        <p className="text-gray-400">
+                          {pos.shares.toFixed(2)} shares · Max win $
+                          {pos.shares.toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="font-bold text-white">
+                          ${val.toFixed(2)}
+                        </p>
+                        <p
+                          className={
+                            pnl >= 0 ? "text-emerald-400" : "text-red-400"
+                          }
+                        >
+                          {pnl >= 0 ? "+" : "-"}${Math.abs(pnl).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <p className="text-[11px] text-gray-500 text-center">
+              By trading, you agree to the{" "}
+              <span className="underline cursor-pointer">Terms of Use</span>.
+            </p>
+
+            {/* Related Markets Section */}
+            <div className="pt-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-3 no-scrollbar">
+                {relatedTags.map((t) => (
+                  <button
+                    key={t.slug}
+                    type="button"
+                    onClick={() => setRelatedFilter(t.slug)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                      relatedFilter === t.slug
+                        ? "bg-white/[0.14] text-white"
+                        : "text-gray-400 hover:text-white"
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-2.5">
+                {relatedEvents.map((rel) => {
+                  const firstMkt = rel.markets?.[0];
+                  const pct = firstMkt
+                    ? Math.round(
+                        (parseFloat(
+                          safeParseArray<string>(firstMkt.outcomePrices)[0],
+                        ) || 0) * 100,
+                      )
+                    : 50;
+
+                  return (
+                    <button
+                      key={rel.id}
+                      type="button"
+                      onClick={() => onSelectEvent?.(rel)}
+                      className="w-full flex items-center justify-between gap-3 p-2.5 rounded-xl bg-[#161a21] hover:bg-[#1d222c] border border-white/[0.06] text-left transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {(rel.icon || rel.image) && (
+                          <img
+                            src={rel.icon || rel.image}
+                            alt={rel.title}
+                            className="w-9 h-9 rounded-lg object-cover bg-white/10 shrink-0"
+                          />
+                        )}
+                        <span className="text-[13px] font-semibold text-white line-clamp-2 leading-snug">
+                          {rel.title}
+                        </span>
+                      </div>
+                      <span className="text-sm font-bold text-white tabular-nums shrink-0">
+                        {pct}%
+                      </span>
                     </button>
-                  )}
-                </div>
+                  );
+                })}
               </div>
             </div>
           </div>
-        )}
+        </div>
       </div>
+
+      {/* ================= CLOSE POSITION MODAL ================= */}
+      {modalPosition && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+          onClick={() => setModalTradeId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-[#161a21] border border-white/[0.12] p-5 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs text-gray-400 truncate">{event.title}</p>
+                <h3 className="text-lg font-bold text-white mt-0.5 truncate">
+                  {modalPosition.marketName}{" "}
+                  <span className="text-gray-400">·</span>{" "}
+                  <span
+                    className={
+                      modalPosition.side ===
+                      (outcomesList.find((x) => x.id === modalPosition.marketId)
+                        ?.yesLabel || "Yes")
+                        ? "text-emerald-400"
+                        : "text-red-400"
+                    }
+                  >
+                    {modalPosition.side}
+                  </span>
+                </h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setModalTradeId(null)}
+                aria-label="Dismiss modal"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/[0.08] transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-[#0d1016] border border-white/[0.07] p-4 space-y-2.5 text-sm tabular-nums">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Shares</span>
+                <span className="font-semibold text-white">
+                  {modalPosition.shares.toFixed(2)} shares
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Entry Cost</span>
+                <span className="font-semibold text-gray-200">
+                  ${modalPosition.cost.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Current Price</span>
+                <span className="font-semibold text-gray-200">
+                  {formatCents(modalLivePrice)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Max Win</span>
+                <span className="font-semibold text-gray-200">
+                  ${modalPosition.shares.toFixed(2)}
+                </span>
+              </div>
+              <div className="border-t border-white/[0.07] pt-2.5 flex items-center justify-between">
+                <span className="text-gray-300 font-semibold">
+                  Remaining Value (to Cash)
+                </span>
+                <div className="text-right">
+                  <span className="text-base font-bold text-white">
+                    ${modalValue.toFixed(2)}
+                  </span>
+                  <span
+                    className={`ml-2 text-xs font-bold ${
+                      modalPnl >= 0 ? "text-emerald-400" : "text-red-400"
+                    }`}
+                  >
+                    ({modalPnl >= 0 ? "+" : "-"}${Math.abs(modalPnl).toFixed(2)}
+                    )
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => setModalTradeId(null)}
+                className="flex-1 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] text-sm font-semibold text-gray-200 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => void handleClosePosition(modalPosition)}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-bold text-white transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {isSubmitting
+                  ? "Closing..."
+                  : `Close ($${modalValue.toFixed(2)})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-export default RewardsPage;

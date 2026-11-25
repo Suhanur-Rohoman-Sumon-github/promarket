@@ -1,5 +1,12 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken";
 
 const GAMMA_API = "https://gamma-api.polymarket.com";
 const CLOB_API = "https://clob.polymarket.com";
@@ -19,15 +26,10 @@ const TIMEFRAMES = [
 ] as const;
 
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
-const POSITIONS_STORAGE_KEY = "pm_realtime_positions_v1";
 
 // ---------- Types ----------
 interface DemoUser {
-  username?: string;
   email?: string;
-  password?: string;
-  portfolio?: string;
-  cash?: string | number;
 }
 
 export interface MarketTag {
@@ -102,16 +104,20 @@ interface LiveQuote {
   mid: number;
 }
 
-interface PositionItem {
-  key: string;
-  userId: string;
-  tokenId: string;
+interface TradePosition {
+  _id: string;
+  userEmail: string;
   eventId: string;
+  eventSlug?: string;
+  eventTitle?: string;
   marketId: string;
   marketName: string;
+  tokenId: string;
   side: string;
   shares: number;
+  entryPrice: number;
   cost: number;
+  status: string;
 }
 
 interface WsMessage {
@@ -158,10 +164,7 @@ function formatCashString(amount: number): string {
   })}`;
 }
 
-function readAuthIdentity(): {
-  loggedIn: boolean;
-  userId: string;
-} {
+function readAuthIdentity(): { loggedIn: boolean; userId: string } {
   try {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
     if (!raw) return { loggedIn: false, userId: "guest" };
@@ -177,29 +180,11 @@ function readAuthIdentity(): {
   }
 }
 
-async function syncBackendCash(email: string, nextCash: number): Promise<void> {
-  if (!email || email === "guest") return;
-  try {
-    await fetch(`${API_BASE}/users/cash`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, cash: nextCash }),
-    });
-    window.dispatchEvent(new Event("promarkets-auth-change"));
-  } catch {
-    // ignore transient network errors
-  }
-}
-
-function readStoredPositions(): Record<string, PositionItem> {
-  try {
-    const raw = localStorage.getItem(POSITIONS_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, PositionItem>;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+async function getValidToken(): Promise<string | null> {
+  const first = await getFirebaseToken();
+  if (first) return first;
+  await new Promise((r) => setTimeout(r, 600));
+  return await getFirebaseToken();
 }
 
 function formatDollarVol(vol: number | string | undefined): string {
@@ -321,66 +306,113 @@ export default function MarketDetailPage({
   const [tradeTab, setTradeTab] = useState<"Buy" | "Sell">("Buy");
   const [amount, setAmount] = useState<string>("");
   const [orderNotice, setOrderNotice] = useState<string>("");
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [bookmarked, setBookmarked] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [relatedEvents, setRelatedEvents] = useState<MarketEvent[]>([]);
   const [relatedFilter, setRelatedFilter] = useState<string>("All");
 
-  // Synced user identity + backend cash + positions + position modal
+  // User identity + backend cash + backend positions
   const [authState, setAuthState] = useState(() => readAuthIdentity());
   const [cash, setCash] = useState<number>(0);
-  const [loadingCash, setLoadingCash] = useState<boolean>(false);
-  const cashRef = useRef<number>(0);
-  useEffect(() => {
-    cashRef.current = cash;
-  }, [cash]);
+  const [loadingCash, setLoadingCash] = useState<boolean>(true);
 
   const [livePrices, setLivePrices] = useState<Record<string, LiveQuote>>({});
   const [resolvedMap, setResolvedMap] = useState<Record<string, 0 | 1>>({});
-  const [positions, setPositions] = useState<Record<string, PositionItem>>(() =>
-    readStoredPositions(),
-  );
-  const [modalPosKey, setModalPosKey] = useState<string | null>(null);
+  const [positions, setPositions] = useState<TradePosition[]>([]);
+  const [modalTradeId, setModalTradeId] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
+  const settlingTokensRef = useRef<Set<string>>(new Set());
 
   const isLoggedIn = authState.loggedIn;
   const userId = authState.userId;
 
-  const fetchUserCash = async (email: string) => {
+  const fetchUserCash = useCallback(async (email: string) => {
     if (!email || email === "guest") {
       setCash(0);
-      cashRef.current = 0;
+      setLoadingCash(false);
       return;
     }
     setLoadingCash(true);
     try {
-      const res = await fetch(`${API_BASE}/users/${encodeURIComponent(email)}`);
+      const token = await getValidToken();
+      if (!token) return;
+
+      const res = await fetch(
+        `${API_BASE}/users/${encodeURIComponent(email)}`,
+        {
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
       if (!res.ok) return;
+
       const json = (await res.json()) as {
         success?: boolean;
-        data?: { cash?: number };
+        cash?: number | string;
+        data?: { cash?: number | string };
+        user?: { cash?: number | string };
       };
-      if (json.success && json.data) {
-        const backendCash = parseCashNumber(json.data.cash);
-        setCash(backendCash);
-        cashRef.current = backendCash;
+      const rawCash = json?.data?.cash ?? json?.user?.cash ?? json?.cash;
+      if (rawCash !== undefined) {
+        setCash(parseCashNumber(rawCash));
       }
     } catch {
       // ignore transient network errors
     } finally {
       setLoadingCash(false);
     }
-  };
+  }, []);
 
-  // Load cash from backend & listen for auth/balance changes
+  const fetchOpenTrades = useCallback(
+    async (email: string, eventId?: string) => {
+      if (!email || email === "guest" || !eventId) {
+        setPositions([]);
+        return;
+      }
+      try {
+        const token = await getValidToken();
+        if (!token) return;
+
+        const res = await fetch(
+          `${API_BASE}/trades/${encodeURIComponent(
+            email,
+          )}?status=OPEN&eventId=${encodeURIComponent(eventId)}`,
+          {
+            cache: "no-store",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+        if (!res.ok) return;
+
+        const json = (await res.json()) as {
+          success?: boolean;
+          data?: TradePosition[];
+        };
+        if (json.success && Array.isArray(json.data)) {
+          setPositions(json.data);
+        }
+      } catch {
+        // ignore transient network errors
+      }
+    },
+    [],
+  );
+
+  // Load cash & open trades directly from backend
   useEffect(() => {
     void fetchUserCash(userId);
+    void fetchOpenTrades(userId, event?.id);
 
     const syncAuth = () => {
       const next = readAuthIdentity();
       setAuthState(next);
-      setPositions(readStoredPositions());
       void fetchUserCash(next.userId);
+      void fetchOpenTrades(next.userId, event?.id);
     };
 
     window.addEventListener("promarkets-auth-change", syncAuth);
@@ -389,7 +421,7 @@ export default function MarketDetailPage({
       window.removeEventListener("promarkets-auth-change", syncAuth);
       window.removeEventListener("storage", syncAuth);
     };
-  }, [userId]);
+  }, [userId, event?.id, fetchUserCash, fetchOpenTrades]);
 
   // Parse active sub-markets sorted by highest Yes probability
   const outcomesList = useMemo<OutcomeRow[]>(() => {
@@ -445,7 +477,6 @@ export default function MarketDetailPage({
   );
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedOutcomeId(initialMarketId || outcomesList[0]?.id || "");
     setSelectedSide(initialSide || "Yes");
     setAmount("");
@@ -675,7 +706,7 @@ export default function MarketDetailPage({
       }
     };
 
-    checkResult();
+    void checkResult();
     const id = window.setInterval(checkResult, 10_000);
     return () => {
       cancelled = true;
@@ -683,47 +714,72 @@ export default function MarketDetailPage({
     };
   }, [event?.slug]);
 
-  // 3. Auto-Settle User's Open Positions & Sync Payout to Backend Cash
+  // 3. Auto-Settle Open Positions via POST /api/v1/trades/settle
   useEffect(() => {
-    if (!isLoggedIn) return;
-    const entries = Object.entries(positions);
-    if (entries.length === 0) return;
+    if (!isLoggedIn || positions.length === 0) return;
 
-    let payoutTotal = 0;
-    let changed = false;
-    const nextPositions: Record<string, PositionItem> = { ...positions };
-
-    entries.forEach(([key, pos]) => {
-      if (pos.userId !== userId) return;
+    const toSettle = positions.filter((pos) => {
       const result = resolvedMap[pos.tokenId];
-      if (result === 1 || result === 0) {
-        payoutTotal += pos.shares * result;
-        delete nextPositions[key];
-        changed = true;
-      }
+      return (
+        (result === 0 || result === 1) &&
+        !settlingTokensRef.current.has(pos.tokenId)
+      );
     });
 
-    if (changed) {
-      const updatedCash = Number((cashRef.current + payoutTotal).toFixed(2));
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCash(updatedCash);
-      cashRef.current = updatedCash;
-      setPositions(nextPositions);
-      try {
-        localStorage.setItem(
-          POSITIONS_STORAGE_KEY,
-          JSON.stringify(nextPositions),
-        );
-      } catch {
-        // ignore storage error
+    if (toSettle.length === 0) return;
+
+    const settleAll = async () => {
+      const token = await getValidToken();
+      if (!token) return;
+
+      for (const pos of toSettle) {
+        const result = resolvedMap[pos.tokenId];
+        if (result !== 0 && result !== 1) continue;
+        settlingTokensRef.current.add(pos.tokenId);
+
+        try {
+          const res = await fetch(`${API_BASE}/trades/settle`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              email: userId,
+              tokenId: pos.tokenId,
+              result,
+            }),
+          });
+          const json = (await res.json()) as {
+            success?: boolean;
+            data?: {
+              settledCount?: number;
+              totalPayout?: number;
+              cash?: number | null;
+            };
+          };
+          if (res.ok && json.success && json.data) {
+            if (typeof json.data.cash === "number") {
+              setCash(json.data.cash);
+              window.dispatchEvent(new Event("promarkets-auth-change"));
+            }
+            setPositions((prev) =>
+              prev.filter((p) => p.tokenId !== pos.tokenId),
+            );
+            const payout = json.data.totalPayout ?? 0;
+            setOrderNotice(
+              payout > 0
+                ? `Market resolved! Settled +$${payout.toFixed(2)} payout to your cash.`
+                : "Market resolved. Position settled at $0.00.",
+            );
+          }
+        } catch {
+          settlingTokensRef.current.delete(pos.tokenId);
+        }
       }
-      void syncBackendCash(userId, updatedCash);
-      setOrderNotice(
-        payoutTotal > 0
-          ? `Market resolved! Settled +$${payoutTotal.toFixed(2)} payout to your cash.`
-          : "Market resolved. Position settled at $0.00.",
-      );
-    }
+    };
+
+    void settleAll();
   }, [resolvedMap, positions, isLoggedIn, userId]);
 
   // 4. Fetch & Auto-Refresh CLOB Price History for Top 4 Lines
@@ -767,7 +823,7 @@ export default function MarketDetailPage({
       }
     }
 
-    loadHistory();
+    void loadHistory();
 
     const isShortTf =
       timeframe === "1H" || timeframe === "6H" || timeframe === "1D";
@@ -929,7 +985,7 @@ export default function MarketDetailPage({
     return side === "yes" ? o.yesProb : o.noProb;
   };
 
-  const getPositionLivePrice = (pos: PositionItem): number => {
+  const getPositionLivePrice = (pos: TradePosition): number => {
     const o = outcomesList.find((x) => x.id === pos.marketId);
     const isYes = pos.side === (o?.yesLabel || "Yes");
     if (pos.tokenId && resolvedMap[pos.tokenId] !== undefined) {
@@ -938,7 +994,7 @@ export default function MarketDetailPage({
     if (pos.tokenId && livePrices[pos.tokenId]?.bid) {
       return livePrices[pos.tokenId].bid;
     }
-    return o ? getLiveOutcomeProb(o, isYes ? "yes" : "no") : 0.5;
+    return o ? getLiveOutcomeProb(o, isYes ? "yes" : "no") : pos.entryPrice;
   };
 
   const yesToken = activeOutcome?.yesTokenId ?? null;
@@ -977,59 +1033,73 @@ export default function MarketDetailPage({
       : null;
 
   const isMarketResolved = Boolean(resolutionStatus || activeOutcome?.closed);
-  const posKey = `${userId}:${activeOutcome?.id || "none"}:${selectedSide}`;
-  const currentPos = positions[posKey];
+
+  const currentPos = positions.find(
+    (p) => p.marketId === activeOutcome?.id && p.side === selectedSide,
+  );
   const currentPosValue = currentPos ? currentPos.shares * activePrice : 0;
 
   const numAmount = parseFloat(amount) || 0;
   const estShares = activePrice > 0 ? numAmount / activePrice : 0;
 
-  const persistPortfolio = (
-    nextCash: number,
-    nextPositions: Record<string, PositionItem>,
-  ) => {
-    setCash(nextCash);
-    cashRef.current = nextCash;
-    setPositions(nextPositions);
-    try {
-      localStorage.setItem(
-        POSITIONS_STORAGE_KEY,
-        JSON.stringify(nextPositions),
-      );
-    } catch {
-      // ignore storage errors
-    }
-    void syncBackendCash(userId, nextCash);
-  };
-
-  const handleClosePosition = (pos: PositionItem) => {
+  const handleClosePosition = async (pos: TradePosition) => {
     if (!isLoggedIn) {
       setOrderNotice("Please log in to close a position.");
-      setModalPosKey(null);
+      setModalTradeId(null);
       return;
     }
-    const closePrice = getPositionLivePrice(pos);
-    const proceeds = Number((pos.shares * closePrice).toFixed(2));
-    const nextPos: Record<string, PositionItem> = { ...positions };
-    delete nextPos[pos.key];
+    setIsSubmitting(true);
+    try {
+      const token = await getValidToken();
+      if (!token) {
+        setOrderNotice("Session expired. Please log in again.");
+        return;
+      }
 
-    const nextCash = Number((cashRef.current + proceeds).toFixed(2));
-    persistPortfolio(nextCash, nextPos);
-    setModalPosKey(null);
-    setOrderNotice(
-      `Closed ${pos.shares.toFixed(2)} ${pos.side} shares — +$${proceeds.toFixed(
-        2,
-      )} added to cash.`,
-    );
+      const closePrice = Math.min(1, Math.max(0, getPositionLivePrice(pos)));
+      const res = await fetch(`${API_BASE}/trades/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          email: userId,
+          tradeId: pos._id,
+          closePrice,
+        }),
+      });
+      const json = (await res.json()) as {
+        success?: boolean;
+        message?: string;
+        data?: { proceeds: number; cash: number };
+      };
+      if (!res.ok || !json.success || !json.data) {
+        setOrderNotice(json.message || "Failed to close position.");
+        return;
+      }
+      setCash(json.data.cash);
+      window.dispatchEvent(new Event("promarkets-auth-change"));
+      setPositions((prev) => prev.filter((p) => p._id !== pos._id));
+      setModalTradeId(null);
+      setOrderNotice(
+        `Closed ${pos.shares.toFixed(2)} ${pos.side} shares — +$${json.data.proceeds.toFixed(
+          2,
+        )} added to cash.`,
+      );
+    } catch {
+      setOrderNotice("Network error while closing position.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleExecuteTrade = () => {
+  const handleExecuteTrade = async () => {
     if (!isLoggedIn) {
       setOrderNotice("Please log in to place a trade.");
       return;
     }
-    if (loadingCash) return;
-    if (!activeOutcome) return;
+    if (loadingCash || isSubmitting || !activeOutcome) return;
     if (isMarketResolved) {
       setOrderNotice("Trading closed — this market has already resolved.");
       return;
@@ -1042,7 +1112,7 @@ export default function MarketDetailPage({
       setOrderNotice("Enter an amount greater than $0.");
       return;
     }
-    if (activePrice <= 0) {
+    if (activePrice <= 0 || activePrice >= 1) {
       setOrderNotice("Price unavailable for this side.");
       return;
     }
@@ -1052,30 +1122,65 @@ export default function MarketDetailPage({
         setOrderNotice("Insufficient cash balance. Please deposit funds.");
         return;
       }
-      const sharesBought = numAmount / activePrice;
-      const nextCash = Number((cash - numAmount).toFixed(2));
-      const existing = positions[posKey];
-      const nextPos: Record<string, PositionItem> = {
-        ...positions,
-        [posKey]: {
-          key: posKey,
-          userId,
-          tokenId: activeTokenId || posKey,
-          eventId: event.id,
-          marketId: activeOutcome.id,
-          marketName: activeOutcome.name,
-          side: selectedSide,
-          shares: (existing?.shares || 0) + sharesBought,
-          cost: (existing?.cost || 0) + numAmount,
-        },
-      };
-      persistPortfolio(nextCash, nextPos);
-      setAmount("");
-      setOrderNotice(
-        `Bought ${sharesBought.toFixed(2)} ${selectedSide} shares @ ${formatCents(
-          activePrice,
-        )} (Wins $${sharesBought.toFixed(2)} if ${selectedSide} wins)`,
-      );
+      setIsSubmitting(true);
+      try {
+        const token = await getValidToken();
+        if (!token) {
+          setOrderNotice("Session expired. Please log in again.");
+          return;
+        }
+
+        const res = await fetch(`${API_BASE}/trades/buy`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            email: userId,
+            eventId: event.id,
+            eventSlug: event.slug || "",
+            eventTitle: event.title,
+            marketId: activeOutcome.id,
+            marketName: activeOutcome.name,
+            tokenId: activeTokenId || `${activeOutcome.id}:${selectedSide}`,
+            side: selectedSide,
+            amountUsd: numAmount,
+            price: activePrice,
+          }),
+        });
+        const json = (await res.json()) as {
+          success?: boolean;
+          message?: string;
+          data?: { trade: TradePosition; cash: number };
+        };
+
+        if (!res.ok || !json.success || !json.data) {
+          setOrderNotice(json.message || "Buy order failed.");
+          return;
+        }
+
+        const { trade, cash: updatedCash } = json.data;
+        setCash(updatedCash);
+        window.dispatchEvent(new Event("promarkets-auth-change"));
+        setPositions((prev) => {
+          const exists = prev.some((p) => p._id === trade._id);
+          return exists
+            ? prev.map((p) => (p._id === trade._id ? trade : p))
+            : [trade, ...prev];
+        });
+        setAmount("");
+        const sharesBought = numAmount / activePrice;
+        setOrderNotice(
+          `Bought ${sharesBought.toFixed(2)} ${selectedSide} shares @ ${formatCents(
+            activePrice,
+          )} (Wins $${sharesBought.toFixed(2)} if ${selectedSide} wins)`,
+        );
+      } catch {
+        setOrderNotice("Network error while placing buy order.");
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
       if (!currentPos || currentPos.shares <= 0) {
         setOrderNotice(`You do not own any ${selectedSide} shares to sell.`);
@@ -1086,37 +1191,62 @@ export default function MarketDetailPage({
         setOrderNotice(`Max sellable value is $${maxUsd.toFixed(2)}.`);
         return;
       }
-      const sharesToSell = Math.min(currentPos.shares, numAmount / activePrice);
-      const proceeds = sharesToSell * activePrice;
-      const remainingShares = currentPos.shares - sharesToSell;
-      const nextPos: Record<string, PositionItem> = { ...positions };
+      setIsSubmitting(true);
+      try {
+        const token = await getValidToken();
+        if (!token) {
+          setOrderNotice("Session expired. Please log in again.");
+          return;
+        }
 
-      if (remainingShares <= 0.0001) {
-        delete nextPos[posKey];
-      } else {
-        nextPos[posKey] = {
-          ...currentPos,
-          shares: remainingShares,
-          cost: currentPos.cost * (remainingShares / currentPos.shares),
+        const res = await fetch(`${API_BASE}/trades/sell`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            email: userId,
+            marketId: activeOutcome.id,
+            side: selectedSide,
+            amountUsd: numAmount,
+            price: activePrice,
+          }),
+        });
+        const json = (await res.json()) as {
+          success?: boolean;
+          message?: string;
+          data?: { trade: TradePosition; proceeds: number; cash: number };
         };
-      }
 
-      const nextCash = Number((cash + proceeds).toFixed(2));
-      persistPortfolio(nextCash, nextPos);
-      setAmount("");
-      setOrderNotice(
-        `Sold ${sharesToSell.toFixed(2)} ${selectedSide} shares for +$${proceeds.toFixed(
-          2,
-        )}`,
-      );
+        if (!res.ok || !json.success || !json.data) {
+          setOrderNotice(json.message || "Sell order failed.");
+          return;
+        }
+
+        const { trade, proceeds, cash: updatedCash } = json.data;
+        setCash(updatedCash);
+        window.dispatchEvent(new Event("promarkets-auth-change"));
+        setPositions((prev) =>
+          trade.status !== "OPEN" || trade.shares <= 0.0001
+            ? prev.filter((p) => p._id !== trade._id)
+            : prev.map((p) => (p._id === trade._id ? trade : p)),
+        );
+        setAmount("");
+        setOrderNotice(
+          `Sold ${selectedSide} shares for +$${proceeds.toFixed(2)}`,
+        );
+      } catch {
+        setOrderNotice("Network error while placing sell order.");
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
-  const eventPositions = Object.values(positions).filter(
-    (p) => p.eventId === event.id && p.userId === userId,
-  );
-
-  const modalPosition = modalPosKey ? (positions[modalPosKey] ?? null) : null;
+  const modalPosition = modalTradeId
+    ? (positions.find((p) => p._id === modalTradeId) ?? null)
+    : null;
   const modalLivePrice = modalPosition
     ? getPositionLivePrice(modalPosition)
     : 0;
@@ -1248,7 +1378,11 @@ export default function MarketDetailPage({
                 >
                   <svg
                     viewBox="0 0 24 24"
-                    className={`w-4 h-4 ${bookmarked ? "fill-white stroke-white" : "fill-none stroke-current"}`}
+                    className={`w-4 h-4 ${
+                      bookmarked
+                        ? "fill-white stroke-white"
+                        : "fill-none stroke-current"
+                    }`}
                     strokeWidth="1.8"
                   >
                     <path
@@ -1360,7 +1494,7 @@ export default function MarketDetailPage({
                       );
                     })}
 
-                    {/* Outcome Lines + Focused Area Fill + Pulsing Live End Dot */}
+                    {/* Outcome Lines */}
                     {topChartOutcomes.map((o) => {
                       const s = seriesMap[o.id] || [];
                       if (s.length < 2) return null;
@@ -1848,8 +1982,8 @@ export default function MarketDetailPage({
               {/* Primary CTA */}
               <button
                 type="button"
-                disabled={isMarketResolved || loadingCash}
-                onClick={handleExecuteTrade}
+                disabled={isMarketResolved || loadingCash || isSubmitting}
+                onClick={() => void handleExecuteTrade()}
                 className={`w-full py-3 rounded-xl text-white text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   tradeTab === "Sell"
                     ? "bg-amber-600 hover:bg-amber-500"
@@ -1862,9 +1996,11 @@ export default function MarketDetailPage({
                     ? "Log in to Trade"
                     : loadingCash
                       ? "Loading..."
-                      : tradeTab === "Buy" && cash <= 0
-                        ? "Deposit Cash"
-                        : `${tradeTab} ${selectedSide}`}
+                      : isSubmitting
+                        ? "Processing..."
+                        : tradeTab === "Buy" && cash <= 0
+                          ? "Deposit Cash"
+                          : `${tradeTab} ${selectedSide}`}
               </button>
 
               {orderNotice && (
@@ -1875,19 +2011,19 @@ export default function MarketDetailPage({
             </div>
 
             {/* Open Positions on this Event (Click to open Close modal) */}
-            {eventPositions.length > 0 && (
+            {positions.length > 0 && (
               <div className="bg-[#161a21] border border-white/[0.08] rounded-2xl p-4 space-y-2.5">
-                {eventPositions.map((pos) => {
+                {positions.map((pos) => {
                   const liveP = getPositionLivePrice(pos);
                   const val = pos.shares * liveP;
                   const pnl = val - pos.cost;
                   return (
                     <div
-                      key={pos.key}
+                      key={pos._id}
                       onClick={() => {
                         setSelectedOutcomeId(pos.marketId);
                         setSelectedSide(pos.side);
-                        setModalPosKey(pos.key);
+                        setModalTradeId(pos._id);
                       }}
                       className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-transparent hover:border-white/[0.1] cursor-pointer tabular-nums transition-colors"
                     >
@@ -1988,7 +2124,7 @@ export default function MarketDetailPage({
       {modalPosition && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
-          onClick={() => setModalPosKey(null)}
+          onClick={() => setModalTradeId(null)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -2016,7 +2152,7 @@ export default function MarketDetailPage({
 
               <button
                 type="button"
-                onClick={() => setModalPosKey(null)}
+                onClick={() => setModalTradeId(null)}
                 aria-label="Dismiss modal"
                 className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/[0.08] transition-colors"
               >
@@ -2072,17 +2208,21 @@ export default function MarketDetailPage({
             <div className="flex items-center gap-2.5">
               <button
                 type="button"
-                onClick={() => setModalPosKey(null)}
-                className="flex-1 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] text-sm font-semibold text-gray-200 transition-colors cursor-pointer"
+                disabled={isSubmitting}
+                onClick={() => setModalTradeId(null)}
+                className="flex-1 py-2.5 rounded-xl bg-white/[0.07] hover:bg-white/[0.12] text-sm font-semibold text-gray-200 transition-colors cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => handleClosePosition(modalPosition)}
-                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-bold text-white transition-colors cursor-pointer"
+                disabled={isSubmitting}
+                onClick={() => void handleClosePosition(modalPosition)}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-sm font-bold text-white transition-colors cursor-pointer disabled:opacity-50"
               >
-                Close (${modalValue.toFixed(2)})
+                {isSubmitting
+                  ? "Closing..."
+                  : `Close ($${modalValue.toFixed(2)})`}
               </button>
             </div>
           </div>
