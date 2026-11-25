@@ -25,6 +25,7 @@ import DepositPage from "../pages/Home/DepositPage";
 import WithdrawPage from "../pages/Home/WithdrawPage";
 import AdminPage from "../pages/Home/AdminPage";
 import AdminRoute from "./AdminRoute";
+import PaymentSuccess from "../pages/Home/PaymentSuccess";
 
 const route = createBrowserRouter([
   {
@@ -52,6 +53,7 @@ const route = createBrowserRouter([
       { path: "terms", element: <TermsPage /> },
       { path: "login", element: <AuthPage mode="login" /> },
       { path: "signup", element: <AuthPage mode="signup" /> },
+      {path: "payment-success", element: <PaymentSuccess />},
       {
         path: "admin",
         element: (
