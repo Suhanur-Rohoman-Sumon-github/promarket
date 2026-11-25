@@ -16,12 +16,7 @@ import {
 } from "lucide-react";
 
 const API_BASE_URL =
-  (
-    import.meta as unknown as { env?: Record<string, string> }
-  ).env?.VITE_API_URL?.replace(
-    /^https:\/\/(localhost|127\.0\.0\.1)/,
-    "http://$1",
-  ) || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
 
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 
@@ -211,13 +206,16 @@ export function RewardsPage({
     try {
       const res = await fetch(
         `${API_BASE_URL}/users/${encodeURIComponent(email)}`,
+        { cache: "no-store" },
       );
       const json = await res.json().catch(() => null);
+      console.log(json);
 
-      if (!res.ok) {
-        console.error("Database fetch failed:", res.status, json);
+      if (!res.ok || !json?.success || !json?.data) {
+        
+        setIsSpinning(false);
         setSpinError(
-          json?.message || `API error (${res.status}) loading user rewards.`,
+          json?.message || json?.error || `Server error (${res.status})`,
         );
         return;
       }
