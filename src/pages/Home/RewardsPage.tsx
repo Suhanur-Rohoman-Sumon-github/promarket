@@ -209,7 +209,7 @@ export function RewardsPage({
         { cache: "no-store" },
       );
       const json = await res.json().catch(() => null);
-      console.log(json);
+      
 
       if (!res.ok || !json?.success || !json?.data) {
         
