@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { signOut } from "firebase/auth";
 import { auth } from "../../firebase"; // adjust path
+import { UserSkeleton } from "./UserSkeleton";
 
 const POLY_API = "https://gamma-api.polymarket.com";
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
@@ -144,10 +145,10 @@ export default function Navbar() {
     const fetchUser = async () => {
       try {
         const token = await getFirebaseToken();
-       
+
         if (!token) {
           setUser(null);
-          return;
+          <UserSkeleton />;
         }
 
         const res = await fetch(
