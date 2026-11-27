@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import NotFoundPage from "../pages/Home/NotFoundPage";
+import { getFirebaseToken } from "../utils/getFirebaseToken"; // adjust path if placed elsewhere
 
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 const API_BASE =
@@ -36,21 +37,52 @@ export default function AdminRoute({
 
     const controller = new AbortController();
 
-    fetch(`${API_BASE}/users/${encodeURIComponent(email)}`, {
-      signal: controller.signal,
-    })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
+    const verifyAdmin = async () => {
+      try {
+        const token = await getFirebaseToken();
+        if (controller.signal.aborted) return;
+
+        if (!token) {
+          setStatus("denied");
+          return;
+        }
+
+        const res = await fetch(
+          `${API_BASE}/users/${encodeURIComponent(email)}`,
+          {
+            signal: controller.signal,
+            cache: "no-store",
+            credentials: "include",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          },
+        );
+
+        if (!res.ok) {
+          setStatus("denied");
+          return;
+        }
+
+        const json = await res.json();
+        if (controller.signal.aborted) return;
+
+        console.log(json);
+
         const roles = json?.data?.roles;
         const isAdmin =
           roles === "admin" ||
           (Array.isArray(roles) && roles.includes("admin"));
 
         setStatus(json?.success && isAdmin ? "allowed" : "denied");
-      })
-      .catch((err) => {
-        if (err?.name !== "AbortError") setStatus("denied");
-      });
+      } catch (err) {
+        if ((err as Error)?.name !== "AbortError") {
+          setStatus("denied");
+        }
+      }
+    };
+
+    verifyAdmin();
 
     return () => controller.abort();
   }, [email]);

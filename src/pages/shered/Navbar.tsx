@@ -394,7 +394,7 @@ export default function Navbar() {
                   onFocus={() => results.length > 0 && setDropdownOpen(true)}
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
-                  placeholder="Search polymarkets..."
+                  placeholder="Search promarkets..."
                   className="w-full bg-transparent outline-none text-sm text-white placeholder:text-gray-500"
                 />
                 {searching ? (

@@ -13,6 +13,7 @@ import {
   Users,
   Wallet,
 } from "lucide-react";
+import { getFirebaseToken } from "../../utils/getFirebaseToken"; // adjust path if placed elsewhere
 
 const API_BASE =
   import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
@@ -129,11 +130,27 @@ export default function AdminPage() {
   const [editingUser, setEditingUser] = useState<UserItem | null>(null);
   const [editCash, setEditCash] = useState<string>("");
 
+  const getAuthHeaders = useCallback(async (withJson = false) => {
+    const token = await getFirebaseToken();
+    if (!token) {
+      throw new Error("Missing authentication token. Please log in again.");
+    }
+    return {
+      ...(withJson ? { "Content-Type": "application/json" } : {}),
+      Authorization: `Bearer ${token}`,
+    };
+  }, []);
+
   const fetchOverview = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/admin/overview`);
+      const headers = await getAuthHeaders();
+      const res = await fetch(`${API_BASE}/admin/overview`, {
+        cache: "no-store",
+        credentials: "include",
+        headers,
+      });
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(json.message || "Failed to load admin data");
@@ -147,7 +164,7 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [getAuthHeaders]);
 
   useEffect(() => {
     fetchOverview();
@@ -160,9 +177,11 @@ export default function AdminPage() {
     setActionId(withdrawId);
     setError("");
     try {
+      const headers = await getAuthHeaders(true);
       const res = await fetch(`${API_BASE}/admin/withdraw/${withdrawId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers,
         body: JSON.stringify({ status }),
       });
       const json = await res.json();
@@ -184,9 +203,11 @@ export default function AdminPage() {
     setActionId(orderId);
     setError("");
     try {
+      const headers = await getAuthHeaders(true);
       const res = await fetch(`${API_BASE}/admin/deposit/${orderId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers,
         body: JSON.stringify({ action }),
       });
       const json = await res.json();
@@ -207,11 +228,13 @@ export default function AdminPage() {
     setActionId(editingUser.email);
     setError("");
     try {
+      const headers = await getAuthHeaders(true);
       const res = await fetch(
         `${API_BASE}/admin/users/${encodeURIComponent(editingUser.email)}`,
         {
           method: "PATCH",
-          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          headers,
           body: JSON.stringify({ cash: Number(editCash) }),
         },
       );
