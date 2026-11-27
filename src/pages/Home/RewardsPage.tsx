@@ -504,7 +504,7 @@ export function RewardsPage({
                   </button>
                 ) : isLoadingDb && !dbUser ? (
                   <div className="px-5 py-3 rounded-xl bg-white/[0.06] border border-white/[0.1] text-xs text-gray-300 font-semibold">
-                    Loading rewards from database...
+                    Loading .....
                   </div>
                 ) : !hasFirstDeposit ? (
                   <button
