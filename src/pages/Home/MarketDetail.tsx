@@ -12,7 +12,7 @@ const GAMMA_API = "https://gamma-api.polymarket.com";
 const CLOB_API = "https://clob.polymarket.com";
 const WS_MARKET_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 const API_BASE =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets.tech/api/v1";
 
 const LINE_COLORS = ["#60a5fa", "#2563eb", "#eab308", "#f97316"] as const;
 

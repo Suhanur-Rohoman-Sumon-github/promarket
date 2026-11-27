@@ -17,7 +17,7 @@ import {
 import { getFirebaseToken } from "../../utils/getFirebaseToken"; // <-- adjust path if needed
 
 const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets.tech/api/v1";
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 
 export interface SpinRecord {

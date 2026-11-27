@@ -7,7 +7,7 @@ const MIN_WITHDRAW = 30;
 const QUICK_AMOUNTS = [30, 50, 100, 250];
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 const API_BASE =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets.tech/api/v1";
 
 const COINS = [
   { id: "USDT_TRC20", name: "USDT", network: "TRC20" },

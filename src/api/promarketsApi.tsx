@@ -9,7 +9,7 @@ import {
 } from "@tanstack/react-query";
 
 const API_BASE =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets.tech/api/v1";
 const AUTH_STORAGE_KEY = "promarkets_demo_user";
 
 // ==================== TYPES ====================

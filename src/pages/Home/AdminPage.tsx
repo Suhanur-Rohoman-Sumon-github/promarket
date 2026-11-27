@@ -16,7 +16,7 @@ import {
 import { getFirebaseToken } from "../../utils/getFirebaseToken"; // adjust path if placed elsewhere
 
 const API_BASE =
-  import.meta.env.VITE_API_URL || "https://promarkets-blue.vercel.app/api/v1";
+  import.meta.env.VITE_API_URL || "https://promarkets.tech/api/v1";
 
 type TabType = "dashboard" | "withdraws" | "deposits" | "users";
 
